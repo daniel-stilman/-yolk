@@ -1,0 +1,68 @@
+{
+  "cases": [
+    {
+      "id": "verified_profile_lookup_by_account_id",
+      "actions": [
+        {
+          "type": "createAccount",
+          "username": "alice",
+          "displayName": "Alice Atlas",
+          "bio": "Collector and prototype host."
+        },
+        {
+          "type": "openProfile",
+          "accountRef": "demo:sol"
+        }
+      ]
+    },
+    {
+      "id": "keep_creates_local_library_entry",
+      "actions": [
+        {
+          "type": "createAccount",
+          "username": "alice",
+          "displayName": "Alice Atlas",
+          "bio": "Collector and prototype host."
+        },
+        {
+          "type": "keep",
+          "mediaRef": "media:sol:1"
+        }
+      ]
+    },
+    {
+      "id": "curated_collection_preserves_original_authorship",
+      "actions": [
+        {
+          "type": "createAccount",
+          "username": "alice",
+          "displayName": "Alice Atlas",
+          "bio": "Collector and prototype host."
+        },
+        {
+          "type": "createCollection",
+          "title": "Signal Stack",
+          "collectionType": "curated",
+          "description": "A cross-account curated set.",
+          "isCurated": true,
+          "children": ["media:sol:1", "media:noor:0"]
+        }
+      ]
+    },
+    {
+      "id": "follow_brings_activity_into_feed",
+      "actions": [
+        {
+          "type": "createAccount",
+          "username": "alice",
+          "displayName": "Alice Atlas",
+          "bio": "Collector and prototype host."
+        },
+        {
+          "type": "follow",
+          "accountRef": "demo:noor"
+        }
+      ]
+    }
+  ]
+}
