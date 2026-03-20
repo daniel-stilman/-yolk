@@ -2,6 +2,8 @@
 
 Yolk is a desktop-first prototype for a decentralized media platform built with plain TypeScript, plain CSS, native DOM APIs, and ES modules. The current build is a vertical slice for identity, signed account state, immutable media, collections, keeps, follows, and profile/feed browsing.
 
+The repo now also contains the first real peer-to-peer runtime slice in [runtime/p2p-runtime.mjs](/C:/Users/danie/yolk/runtime/p2p-runtime.mjs): mutable account heads are published through a real DHT, immutable profile/media objects are distributed as real torrents, and Keep semantics are exercised as actual download-and-seed operations between multiple peers.
+
 ## Core Model
 
 The app follows these non-negotiable rules:
@@ -37,7 +39,7 @@ The networking and peer-to-peer transport are intentionally simplified for this 
 - content/blob references
 - username discovery index
 
-This keeps the identity and authorship architecture clean while leaving room for a future native backend and real swarm transport.
+This keeps the identity and authorship architecture clean while the UI is still on the older in-browser controller. The new runtime is the migration target for replacing that mock path with real network-backed reads and writes.
 
 ## Stack
 
@@ -144,6 +146,7 @@ The suite has two layers:
 
 1. Targeted controller/model assertions in `tests/app.test.mjs`
 2. Real browser + running-backend sanity fixtures in `tests/e2e.test.mjs`
+3. Real peer-to-peer runtime tests in `tests/network.test.mjs`
 
 The sanity fixture pair is authoritative:
 
@@ -151,6 +154,12 @@ The sanity fixture pair is authoritative:
 - `tests/sanity/yolk_sanity_expected.json`
 
 The end-to-end harness starts `server.mjs`, opens the real app bundle in headless Edge through `playwright-core`, drives the actual DOM, and compares the rendered output against the curated expected snapshot. This is the baseline "full run of the program" check for onboarding, discovery, follows, keeps, uploads, collections, and feed rendering.
+
+`tests/network.test.mjs` is the new non-UI proof layer for the actual transport. It launches multiple local peers against a bootstrap DHT node and verifies:
+
+- mutable DHT account heads resolve the latest signed profile
+- immutable media payloads move over a real torrent swarm
+- Keep means download + continue seeding
 
 When behavior changes:
 
@@ -179,8 +188,8 @@ Keep this synchronized with `tests/sanity/yolk_sanity_input.json` and `tests/san
 
 ## Notes For The Next Build
 
-- move the mock DHT/content stores behind a native backend
-- replace local blob refs with actual p2p content references
+- cut the UI over from the mock controller to the runtime in `runtime/p2p-runtime.mjs`
+- replace the remaining mock profile/media/collection flows in the UI with runtime-backed reads and writes
 - add device-key delegation on top of the root account key
 - deepen search/discovery without changing the identity trust order
 - expand collection layout rules without breaking signed authorship boundaries

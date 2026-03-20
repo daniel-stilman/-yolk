@@ -11,7 +11,7 @@
  * - DOM app
  */
 
-export type SectionName = "home" | "discover" | "library" | "profile" | "upload" | "collections";
+export type SectionName = "discover" | "library" | "profile" | "upload";
 export type StorageLike = {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
@@ -90,13 +90,34 @@ type LocalStore = {
   activeSection: SectionName;
   selectedProfileAccountId: string | null;
   flashMessage: string;
-  searchQuery: string;
   collectionDraftChildIds: string[];
+  libraryLayout: Record<string, { x: number; y: number }>;
+  overlayMode: "media" | "folder" | null;
+  collectionOverlayRef: string | null;
 };
 
 type SearchResult = { accountId: string; username: string; displayName: string; verified: boolean };
-type FeedItem = { id: string; kind: ActivityRecord["kind"]; actorAccountId: string; actorUsername: string; subjectTitle: string; createdAt: string; summary: string };
-type LibraryItem = { id: string; title: string; mediaType: string; creatorAccountId: string; creatorUsername: string; description: string; contentRef: string; thumbnailRef: string | null };
+type FeedItem = {
+  id: string;
+  kind: "post" | ActivityRecord["kind"];
+  actorAccountId: string;
+  actorUsername: string;
+  subjectTitle: string;
+  createdAt: string;
+  summary: string;
+  collectionRef?: string;
+  post?: ProfileSummary["collections"][number];
+};
+type LibraryItem = { id: string; ref?: string; title: string; mediaType: string; creatorAccountId: string; creatorUsername: string; description: string; contentRef: string; thumbnailRef: string | null; assetUrl?: string | null };
+type WorkspaceItem = LibraryItem & {
+  kind: "media" | "collection";
+  coverRef?: string | null;
+  coverAssetUrl?: string | null;
+  childCount?: number;
+  saved?: boolean;
+  owned?: boolean;
+  updatedAt?: string;
+};
 type ProfileSummary = {
   accountId: string;
   username: string;
@@ -104,7 +125,32 @@ type ProfileSummary = {
   bio: string;
   verified: boolean;
   uploads: Array<{ id: string; title: string; mediaType: string; creatorAccountId: string; contentRef: string; thumbnailRef: string | null }>;
-  collections: Array<{ id: string; title: string; type: string; isCurated: boolean; description: string; creatorUsername: string; childCreatorUsernames: string[] }>;
+  collections: Array<{
+    sourceKind?: "collection" | "media";
+    id: string;
+    ref?: string;
+    title: string;
+    type: string;
+    isCurated: boolean;
+    description: string;
+    coverMediaRef?: string | null;
+    creatorUsername: string;
+    childCreatorUsernames: string[];
+    children: Array<{
+      kind: "media" | "collection";
+      id: string;
+      ref?: string;
+      title: string;
+      mediaType: string;
+      creatorAccountId: string;
+      creatorUsername: string;
+      description: string;
+      contentRef: string;
+      thumbnailRef: string | null;
+      assetUrl?: string | null;
+    }>;
+    updatedAt?: string;
+  }>;
 };
 export type AppSnapshot = {
   currentAccount: { accountId: string; username: string; displayName: string } | null;
@@ -112,11 +158,12 @@ export type AppSnapshot = {
   selectedProfile: ProfileSummary | null;
   searchResults: SearchResult[];
   feed: FeedItem[];
-  library: { keptCount: number; keptTitles: string[]; keptMedia: LibraryItem[] };
+  library: { keptCount: number; keptTitles: string[]; keptMedia: LibraryItem[]; items: WorkspaceItem[]; collections: ProfileSummary["collections"] };
   network: { accounts: number; media: number; collections: number; keeps: number; follows: number };
   trust: { selectedAccountId: string | null; selectedHeadSeq: number | null; selectedProfileRef: string | null; resolvedViaDhtHead: boolean; verifiedProfile: boolean };
   suggestions: SearchResult[];
   draftChildren: LibraryItem[];
+  shelfMedia?: Array<LibraryItem & { ref?: string }>;
   flashMessage: string;
 };
 type ScenarioAction =
@@ -130,6 +177,7 @@ export type ScenarioFixture = { id: string; actions: ScenarioAction[] };
 
 const NETWORK_STORAGE_KEY = "yolk.network.v1";
 const LOCAL_STORAGE_KEY = "yolk.local.v1";
+const LIBRARY_LAYOUT_STORAGE_KEY = "yolk.library-layout.v1";
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 const uniq = (values: string[]) => Array.from(new Set(values));
@@ -197,7 +245,7 @@ async function createAccountKeys(): Promise<AccountKeys> {
 }
 
 const emptyNetwork = (): NetworkStore => ({ version: 1, meta: { demoReady: false, demoAccounts: {} }, accounts: {}, heads: {}, profiles: {}, blobs: {}, media: {}, collections: {}, keeps: {}, follows: {}, activities: {}, usernameIndex: {} });
-const emptyLocal = (): LocalStore => ({ currentAccountId: null, publicJwk: null, privateJwk: null, activeSection: "home", selectedProfileAccountId: null, flashMessage: "", searchQuery: "", collectionDraftChildIds: [] });
+const emptyLocal = (): LocalStore => ({ currentAccountId: null, publicJwk: null, privateJwk: null, activeSection: "discover", selectedProfileAccountId: null, flashMessage: "", collectionDraftChildIds: [], libraryLayout: {}, overlayMode: null, collectionOverlayRef: null });
 const readJson = <T>(storage: StorageLike, key: string, fallback: T): T => {
   const raw = storage.getItem(key);
   if (!raw) return clone(fallback);
@@ -264,9 +312,9 @@ async function createMedia(network: NetworkStore, keys: AccountKeys, input: { ti
   return media;
 }
 
-async function createCollection(network: NetworkStore, keys: AccountKeys, input: { title: string; type: string; description: string; isCurated: boolean; childIds: string[] }, now: string) {
+async function createCollection(network: NetworkStore, keys: AccountKeys, input: { title: string; type: string; description: string; isCurated: boolean; childIds: string[]; coverId?: string | null }, now: string) {
   const id = `col_${(await sha256Hex(`${keys.accountId}:${input.title}:${now}`)).slice(0, 24)}`;
-  const coverRef = input.childIds.map(childId => network.media[childId]?.thumbnailRef || null).find(Boolean) || null;
+  const coverRef = input.coverId ? (network.media[input.coverId]?.thumbnailRef || network.media[input.coverId]?.contentRef || null) : (input.childIds.map(childId => network.media[childId]?.thumbnailRef || null).find(Boolean) || null);
   const record: CollectionRecord = { id, creatorAccountId: keys.accountId, title: String(input.title || "").trim() || "Untitled collection", type: String(input.type || "").trim() || "folder", description: String(input.description || "").trim(), coverRef, children: input.childIds.map(childId => ({ kind: network.collections[childId] ? "collection" : "media", id: childId })), isCurated: Boolean(input.isCurated), updatedAt: now, signature: "" };
   record.signature = await signPayload(keys.privateJwk, stripSignature(record));
   network.collections[id] = record;
@@ -332,17 +380,55 @@ async function buildFeed(network: NetworkStore, viewerAccountId: string | null):
   if (!viewerAccountId) return [];
   const followed = new Set(Object.values(network.follows).filter(item => item.followerAccountId === viewerAccountId).map(item => item.followedAccountId));
   const actors = new Set([viewerAccountId, ...followed]);
-  return Promise.all(Object.values(network.activities).filter(item => actors.has(item.actorAccountId)).sort(sortDesc).map(async item => ({ id: item.id, kind: item.kind, actorAccountId: item.actorAccountId, actorUsername: await usernameFor(network, item.actorAccountId), subjectTitle: await subjectTitle(network, item), createdAt: item.createdAt, summary: item.summary })));
+  return Promise.all(Object.values(network.activities).filter(item => actors.has(item.actorAccountId) && item.kind !== "upload").sort(sortDesc).map(async item => ({ id: item.id, kind: item.kind, actorAccountId: item.actorAccountId, actorUsername: await usernameFor(network, item.actorAccountId), subjectTitle: await subjectTitle(network, item), createdAt: item.createdAt, summary: item.summary })));
 }
 
 async function buildLibrary(network: NetworkStore, accountId: string | null): Promise<AppSnapshot["library"]> {
-  if (!accountId) return { keptCount: 0, keptTitles: [], keptMedia: [] };
+  if (!accountId) return { keptCount: 0, keptTitles: [], keptMedia: [], items: [], collections: [] };
+  const items: WorkspaceItem[] = [];
   const keptMedia = (await Promise.all(Object.values(network.keeps).filter(item => item.accountId === accountId).sort(sortDesc).map(async item => {
     const media = network.media[item.mediaId];
     if (!media) return null;
-    return { id: media.id, title: media.title, mediaType: media.mediaType, creatorAccountId: media.creatorAccountId, creatorUsername: await usernameFor(network, media.creatorAccountId), description: media.description, contentRef: media.contentRef, thumbnailRef: media.thumbnailRef } as LibraryItem;
+    return { id: media.id, ref: media.id, kind: "media", title: media.title, mediaType: media.mediaType, creatorAccountId: media.creatorAccountId, creatorUsername: await usernameFor(network, media.creatorAccountId), description: media.description, contentRef: media.contentRef, thumbnailRef: media.thumbnailRef, saved: true, owned: media.creatorAccountId === accountId, updatedAt: item.createdAt } as WorkspaceItem;
   }))).filter(Boolean) as LibraryItem[];
-  return { keptCount: keptMedia.length, keptTitles: keptMedia.map(item => item.title), keptMedia };
+  Object.values(network.collections).filter(item => item.creatorAccountId === accountId).sort(sortDesc).forEach(item => {
+    items.push({
+      id: item.id,
+      ref: item.id,
+      kind: "collection",
+      title: item.title,
+      mediaType: "folder",
+      creatorAccountId: item.creatorAccountId,
+      creatorUsername: "",
+      description: item.description,
+      contentRef: "",
+      thumbnailRef: null,
+      coverRef: item.coverRef,
+      childCount: item.children.length,
+      owned: true,
+      saved: false,
+      updatedAt: item.updatedAt
+    });
+  });
+  Object.values(network.media).filter(item => item.creatorAccountId === accountId).sort(sortDesc).forEach(item => {
+    items.push({
+      id: item.id,
+      ref: item.id,
+      kind: "media",
+      title: item.title,
+      mediaType: item.mediaType,
+      creatorAccountId: item.creatorAccountId,
+      creatorUsername: "",
+      description: item.description,
+      contentRef: item.contentRef,
+      thumbnailRef: item.thumbnailRef,
+      saved: false,
+      owned: true,
+      updatedAt: item.createdAt
+    });
+  });
+  items.push(...(keptMedia as WorkspaceItem[]));
+  return { keptCount: keptMedia.length, keptTitles: keptMedia.map(item => item.title), keptMedia, items, collections: [] };
 }
 
 async function buildProfileSummary(network: NetworkStore, accountId: string | null): Promise<ProfileSummary | null> {
@@ -350,7 +436,50 @@ async function buildProfileSummary(network: NetworkStore, accountId: string | nu
   const resolved = await resolveVerifiedProfile(network, accountId);
   if (!resolved) return null;
   const uploads = Object.values(network.media).filter(item => item.creatorAccountId === accountId).sort(sortDesc).map(item => ({ id: item.id, title: item.title, mediaType: item.mediaType, creatorAccountId: item.creatorAccountId, contentRef: item.contentRef, thumbnailRef: item.thumbnailRef }));
-  const collections = await Promise.all(Object.values(network.collections).filter(item => item.creatorAccountId === accountId).sort(sortDesc).map(async item => ({ id: item.id, title: item.title, type: item.type, isCurated: item.isCurated, description: item.description, creatorUsername: await usernameFor(network, item.creatorAccountId), childCreatorUsernames: uniq(await Promise.all(item.children.map(async child => child.kind === "collection" ? usernameFor(network, network.collections[child.id]?.creatorAccountId || child.id) : usernameFor(network, network.media[child.id]?.creatorAccountId || child.id)))) })));
+  const collections = await Promise.all(Object.values(network.collections).filter(item => item.creatorAccountId === accountId).sort(sortDesc).map(async item => {
+    const children = (await Promise.all(item.children.map(async child => {
+      if (child.kind === "collection") {
+        const record = network.collections[child.id];
+        if (!record) return null;
+        return {
+          kind: "collection" as const,
+          id: record.id,
+          title: record.title,
+          mediaType: "collection",
+          creatorAccountId: record.creatorAccountId,
+          creatorUsername: await usernameFor(network, record.creatorAccountId),
+          description: record.description,
+          contentRef: record.coverRef || "",
+          thumbnailRef: record.coverRef
+        };
+      }
+      const media = network.media[child.id];
+      if (!media) return null;
+      return {
+        kind: "media" as const,
+        id: media.id,
+        title: media.title,
+        mediaType: media.mediaType,
+        creatorAccountId: media.creatorAccountId,
+        creatorUsername: await usernameFor(network, media.creatorAccountId),
+        description: media.description,
+        contentRef: media.contentRef,
+        thumbnailRef: media.thumbnailRef
+      };
+    }))).filter(Boolean) as ProfileSummary["collections"][number]["children"];
+    return {
+      id: item.id,
+      ref: item.id,
+      title: item.title,
+      type: item.type,
+      isCurated: item.isCurated,
+      description: item.description,
+      coverMediaRef: item.coverRef,
+      creatorUsername: await usernameFor(network, item.creatorAccountId),
+      childCreatorUsernames: uniq(children.map(child => child.creatorUsername)),
+      children
+    };
+  }));
   return { accountId, username: resolved.profile.username, displayName: resolved.profile.displayName, bio: resolved.profile.bio, verified: resolved.verified, uploads, collections };
 }
 
@@ -423,65 +552,70 @@ export function createAppController(storage: StorageLike, options?: { now?: () =
       await publishProfile(network, keys, input, now());
       await addActivity(network, keys, "profile", network.heads[keys.accountId].profileRef, "Published initial profile", now());
       local.selectedProfileAccountId = keys.accountId;
-      local.activeSection = "home";
-      setFlash("Local keypair generated, profile signed, and account head published to the mock DHT.");
+      local.activeSection = "discover";
+      setFlash("");
       save();
       return keys.accountId;
     },
     async uploadMedia(input: { title: string; description: string; mediaType: string; fileName: string; dataUrl: string | null; textPreview: string | null; thumbnailRef?: string | null }) {
       const record = await createMedia(network, await currentKeys(), input, now());
-      setFlash(`Published immutable ${record.mediaType} object signed by ${shortId(record.creatorAccountId)}.`);
+      local.collectionDraftChildIds = uniq([...local.collectionDraftChildIds, record.id]);
+      local.activeSection = "library";
+      local.overlayMode = null;
+      setFlash("Added to draft.");
       save();
       return record;
     },
-    async createCollection(input: { title: string; type: string; description: string; isCurated: boolean; childIds: string[] }) {
+    async createCollection(input: { title: string; type: string; description: string; isCurated: boolean; childIds: string[]; coverId?: string | null }) {
       const keys = await currentKeys();
       const record = await createCollection(network, keys, input, now());
       local.collectionDraftChildIds = [];
       local.selectedProfileAccountId = keys.accountId;
-      local.activeSection = "profile";
-      setFlash(record.isCurated ? "Curated collection published. Original media creators remain attached to every referenced item." : "Original collection published and signed.");
+      local.activeSection = "library";
+      local.overlayMode = null;
+      setFlash("Folder created.");
       save();
       return record;
     },
     async keepMedia(mediaId: string) {
       await createKeep(network, await currentKeys(), mediaId, now());
-      local.activeSection = "library";
-      setFlash("Keep recorded. This media is now in the local library and marked for seeding.");
+      setFlash("Saved.");
       save();
     },
     async followAccount(accountId: string) {
       const keys = await currentKeys();
       if (accountId === keys.accountId) {
-        setFlash("This prototype does not let an account follow itself.");
+        setFlash("You're already here.");
         save();
         return;
       }
       await createFollow(network, keys, accountId, now());
-      local.activeSection = "home";
-      setFlash("Follow record signed. Future feed reads can use the followed account's activity.");
+      setFlash("Following.");
       save();
     },
     async openProfile(accountId: string) {
       const profile = await resolveVerifiedProfile(network, accountId);
       if (!profile) {
-        setFlash("No verified profile could be resolved for that account id.");
+        setFlash("Profile unavailable.");
         save();
         return false;
       }
       local.selectedProfileAccountId = accountId;
       local.activeSection = "profile";
-      setFlash(`Resolved profile through the mutable account head for ${profile.profile.username}.`);
+      setFlash("");
       save();
       return true;
     },
     async search(query: string) {
-      local.searchQuery = query;
-      setFlash(query ? "Search results are discovery labels only. Opened profiles resolve by account id." : "");
+      setFlash("");
       save();
       return searchProfiles(network, query);
     },
     setSection(section: SectionName) { local.activeSection = section; save(); },
+    openOverlay(mode: "media" | "folder") { local.overlayMode = mode; local.collectionOverlayRef = null; local.activeSection = "library"; save(); },
+    closeOverlay() { local.overlayMode = null; local.collectionOverlayRef = null; save(); },
+    openCollection(ref: string) { local.collectionOverlayRef = ref; local.overlayMode = null; save(); },
+    closeCollection() { local.collectionOverlayRef = null; save(); },
     dismissFlash() { local.flashMessage = ""; save(); },
     addDraftChild(mediaId: string) { local.collectionDraftChildIds = uniq([...local.collectionDraftChildIds, mediaId]); setFlash("Media added to the collection draft."); save(); },
     removeDraftChild(mediaId: string) { local.collectionDraftChildIds = local.collectionDraftChildIds.filter(id => id !== mediaId); save(); },
@@ -511,13 +645,24 @@ export function createAppController(storage: StorageLike, options?: { now?: () =
         currentAccount: current ? { accountId: current.accountId, username: current.username, displayName: current.displayName } : null,
         activeSection: local.activeSection,
         selectedProfile: selected,
-        searchResults: await searchProfiles(network, local.searchQuery),
+        searchResults: [],
         feed: await buildFeed(network, local.currentAccountId),
         library: await buildLibrary(network, local.currentAccountId),
         network: { accounts: Object.keys(network.accounts).length, media: Object.keys(network.media).length, collections: Object.keys(network.collections).length, keeps: Object.keys(network.keeps).length, follows: Object.keys(network.follows).length },
         trust: { selectedAccountId: selected?.accountId || null, selectedHeadSeq: selectedHead?.seq || null, selectedProfileRef: selectedHead?.profileRef || null, resolvedViaDhtHead: Boolean(selectedHead), verifiedProfile: Boolean(selected?.verified) },
         suggestions: await suggestions(network, local.currentAccountId),
         draftChildren,
+        shelfMedia: (await Promise.all(Object.values(network.media).sort(sortDesc).map(async media => ({
+          id: media.id,
+          ref: media.id,
+          title: media.title,
+          mediaType: media.mediaType,
+          creatorAccountId: media.creatorAccountId,
+          creatorUsername: await usernameFor(network, media.creatorAccountId),
+          description: media.description,
+          contentRef: media.contentRef,
+          thumbnailRef: media.thumbnailRef
+        })))),
         flashMessage: local.flashMessage
       };
     }
@@ -539,38 +684,278 @@ export async function runScenarioFixture(fixture: ScenarioFixture): Promise<AppS
 }
 
 function previewHtml(item: { mediaType: string; contentRef: string; thumbnailRef?: string | null }, network: NetworkStore) {
-  const blob = network.blobs[item.thumbnailRef || item.contentRef];
+  const assetUrl = (item as any).assetUrl || null;
+  const blob = network?.blobs?.[item.thumbnailRef || item.contentRef];
+  if (item.mediaType === "image" && assetUrl) return `<div class="media-preview"><img src="${escapeHtml(assetUrl)}" alt=""></div>`;
+  if (item.mediaType === "video" && assetUrl) return `<div class="media-preview"><video controls preload="metadata" src="${escapeHtml(assetUrl)}"></video></div>`;
+  if (item.mediaType === "audio" && assetUrl) return `<div class="media-preview"><audio controls preload="metadata" src="${escapeHtml(assetUrl)}"></audio></div>`;
   if (item.mediaType === "image" && blob?.dataUrl) return `<div class="media-preview"><img src="${escapeHtml(blob.dataUrl)}" alt=""></div>`;
   if (item.mediaType === "video" && blob?.dataUrl) return `<div class="media-preview"><video controls src="${escapeHtml(blob.dataUrl)}"></video></div>`;
   if (item.mediaType === "audio" && blob?.dataUrl) return `<div class="media-preview"><audio controls src="${escapeHtml(blob.dataUrl)}"></audio></div>`;
-  if (item.mediaType === "text") return `<div class="media-preview text-preview">${escapeHtml(network.blobs[item.contentRef]?.textPreview || "Text object")}</div>`;
+  if (item.mediaType === "text") return `<div class="media-preview text-preview">${escapeHtml(network?.blobs?.[item.contentRef]?.textPreview || "Text object")}</div>`;
   return `<div class="media-preview">${escapeHtml(item.mediaType.toUpperCase())}</div>`;
 }
 
-function blockTitle(title: string, copy: string) {
-  return `<div class="section-header"><div><h3 class="subsection-title">${escapeHtml(title)}</h3><p>${escapeHtml(copy)}</p></div></div>`;
+function blockTitle(title: string, copy = "") {
+  return `<div class="section-header"><div><h3 class="subsection-title">${escapeHtml(title)}</h3>${copy ? `<p>${escapeHtml(copy)}</p>` : ""}</div></div>`;
 }
 
-function renderSection(snapshot: AppSnapshot, state: { network: NetworkStore }) {
-  if (snapshot.activeSection === "discover") {
-    return `<section class="section-block"><div class="sheet">${blockTitle("Discover", "Search by username for discovery, but open profiles by account id for trust.")}<form id="search-form" class="form-grid cols-2"><div class="field"><label for="search-query">Username / label search</label><input id="search-query" name="query" placeholder="sol, noor, or an account id fragment"></div><div class="field"><label for="lookup-account-id">Open profile by account id</label><input id="lookup-account-id" name="accountId" placeholder="acct_..."></div><div class="button-row"><button class="button-primary" type="submit">Resolve discovery</button></div></form></div><div class="section-grid"><div class="sheet">${blockTitle("Search Results", "Verified results come from signed profiles after account-head resolution.")}${snapshot.searchResults.length ? `<div class="search-results">${snapshot.searchResults.map(item => `<article class="search-card"><div class="meta-row"><span class="pill">${item.verified ? "verified profile" : "unverified"}</span><span class="pill-ghost">@${escapeHtml(item.username)}</span></div><h4>${escapeHtml(item.displayName)}</h4><p>${escapeHtml(item.accountId)}</p><div class="button-row"><button class="button-primary" data-open-profile="${escapeHtml(item.accountId)}">Open profile</button><button class="button-secondary" data-follow-account="${escapeHtml(item.accountId)}">Follow</button></div></article>`).join("")}</div>` : `<div class="empty-state"><strong>No discovery results.</strong><p class="empty-copy">Search is only a lookup layer. Verified profiles still resolve by account id through the mutable account head.</p></div>`}</div><div class="sheet">${blockTitle("Suggested Accounts", "A seeded demo graph gives you something real to browse and follow immediately.")}<div class="simple-list">${snapshot.suggestions.map(item => `<article class="simple-item"><h4>${escapeHtml(item.displayName)}</h4><p>@${escapeHtml(item.username)}</p><div class="button-row"><button class="button-secondary" data-open-profile="${escapeHtml(item.accountId)}">Open profile</button><button class="button-ghost" data-follow-account="${escapeHtml(item.accountId)}">Follow</button></div></article>`).join("")}</div></div></div></section>`;
+function networkUsername(network: NetworkStore, accountId: string) {
+  const head = network?.heads?.[accountId];
+  return head ? network.profiles[head.profileRef]?.username || "unknown" : "unknown";
+}
+
+function renderProfileLink(accountId: string, username: string, label?: string) {
+  return `<button class="profile-link" data-open-profile="${escapeHtml(accountId)}">${escapeHtml(label || `@${username}`)}</button>`;
+}
+
+function renderCollectionPreviewItem(
+  child: ProfileSummary["collections"][number]["children"][number],
+  network: NetworkStore,
+  actions: { canKeep: boolean }
+) {
+  const keepToken = (child as any).ref || child.id;
+  const keepButton = actions.canKeep && child.kind === "media" ? `<button class="chip-button" data-keep-media="${escapeHtml(keepToken)}">Save</button>` : "";
+  const preview = child.kind === "media"
+    ? previewHtml({ mediaType: child.mediaType, contentRef: child.contentRef, thumbnailRef: child.thumbnailRef, assetUrl: child.assetUrl || null } as any, network)
+    : `<div class="media-preview media-preview--collection"><span>${escapeHtml(child.title.slice(0, 1) || "C")}</span></div>`;
+  return `<article class="post-child-card" data-media-title="${child.kind === "media" ? escapeHtml(child.title) : ""}">
+    ${preview}
+    <div class="post-child-meta">
+      <div class="meta-row">
+        <span class="pill">${escapeHtml(child.mediaType)}</span>
+        ${renderProfileLink(child.creatorAccountId, child.creatorUsername)}
+      </div>
+      <h5>${escapeHtml(child.title)}</h5>
+      ${child.description ? `<p>${escapeHtml(child.description)}</p>` : ""}
+      ${keepButton ? `<div class="button-row">${keepButton}</div>` : ""}
+    </div>
+  </article>`;
+}
+
+function renderCollectionMode(item: ProfileSummary["collections"][number]) {
+  return `<span class="pill-ghost">${item.isCurated ? "curated" : "original"}</span>`;
+}
+
+function renderCollectionType(item: ProfileSummary["collections"][number]) {
+  return item.type === "curated" && item.isCurated ? "" : `<span class="pill">${escapeHtml(item.type)}</span>`;
+}
+
+function collectionCoverChild(item: ProfileSummary["collections"][number]) {
+  if (!item.children.length) return null;
+  return item.children.find(child => child.ref === item.coverMediaRef && child.kind === "media")
+    || item.children.find(child => child.kind === "media")
+    || null;
+}
+
+function renderCollectionCard(
+  item: ProfileSummary["collections"][number],
+  network: NetworkStore,
+  options: { canKeepChildren: boolean; canKeepCollection?: boolean; clickable?: boolean }
+) {
+  const canKeepCollection = Boolean(options.canKeepCollection && item.ref && item.sourceKind !== "media");
+  return `<article class="post-card ${options.clickable ? "post-card--clickable" : ""}" ${options.clickable && item.ref ? `data-open-collection="${escapeHtml(item.ref)}"` : ""}>
+    <div class="post-card-head">
+      <div class="meta-row meta-row--spread">
+        <div class="meta-row">
+          ${renderCollectionType(item)}
+          ${renderCollectionMode(item)}
+        </div>
+        <div class="button-row">
+          ${canKeepCollection ? `<button class="button-primary post-like-button" data-keep-collection="${escapeHtml(item.ref!)}">Like</button>` : ""}
+        </div>
+      </div>
+      <h4>${escapeHtml(item.title)}</h4>
+      ${item.description ? `<p>${escapeHtml(item.description)}</p>` : ""}
+    </div>
+    <div class="post-child-grid">
+      ${item.children.length ? item.children.map(child => renderCollectionPreviewItem(child, network, { canKeep: options.canKeepChildren })).join("") : `<div class="empty-state empty-state--tight"></div>`}
+    </div>
+  </article>`;
+}
+
+function renderFeedPostCard(item: FeedItem, network: NetworkStore) {
+  if (!item.post) {
+    return `<article class="activity-card"><div class="meta-row"><span class="pill">${escapeHtml(item.kind)}</span>${renderProfileLink(item.actorAccountId, item.actorUsername)}</div><h4>${escapeHtml(item.subjectTitle)}</h4><p>${escapeHtml(item.summary)}</p></article>`;
   }
-  if (snapshot.activeSection === "library") {
-    return `<section class="section-block">${blockTitle("Kept Library", "In Yolk, a like is a Keep action: stored locally, preserved in your library, and conceptually queued to seed.")}<div class="media-grid">${snapshot.library.keptMedia.length ? snapshot.library.keptMedia.map(item => `<article class="media-card">${previewHtml(item, state.network)}<div class="meta-row"><span class="pill-success">kept + seed</span><span class="pill-ghost">@${escapeHtml(item.creatorUsername)}</span></div><h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.description || "No description")}</p></article>`).join("") : `<div class="empty-state"><strong>Nothing kept yet.</strong><p class="empty-copy">Keep media from profiles or discovery to make it part of your permanent local library.</p></div>`}</div></section>`;
+  const coverChild = collectionCoverChild(item.post);
+  const cover = coverChild && coverChild.kind === "media"
+    ? previewHtml({ mediaType: coverChild.mediaType, contentRef: coverChild.contentRef, thumbnailRef: coverChild.thumbnailRef, assetUrl: coverChild.assetUrl || null } as any, network)
+    : `<div class="media-preview media-preview--collection"><span>//</span></div>`;
+  return `<article class="activity-card feed-post-card" data-feed-title="${escapeHtml(item.post.title)}" ${item.collectionRef ? `data-open-collection="${escapeHtml(item.collectionRef)}"` : ""}>
+    <div class="feed-post-head">
+      <div class="meta-row">
+        ${renderProfileLink(item.actorAccountId, item.actorUsername)}
+        ${renderCollectionType(item.post)}
+        ${renderCollectionMode(item.post)}
+      </div>
+      <div class="button-row">
+        ${item.collectionRef ? `<button class="button-primary post-like-button" data-keep-collection="${escapeHtml(item.collectionRef)}">Like</button>` : ""}
+      </div>
+    </div>
+    <button class="feed-cover-button" type="button">
+      ${cover}
+    </button>
+  </article>`;
+}
+
+function defaultTilePosition(index: number) {
+  return {
+    x: 28 + (index % 5) * 184,
+    y: 28 + Math.floor(index / 5) * 204
+  };
+}
+
+function renderLibraryCollectionCard(item: ProfileSummary["collections"][number]) {
+  const coverChild = collectionCoverChild(item);
+  const preview = coverChild && coverChild.kind === "media"
+    ? previewHtml({ mediaType: coverChild.mediaType, contentRef: coverChild.contentRef, thumbnailRef: coverChild.thumbnailRef, assetUrl: coverChild.assetUrl || null } as any, {} as NetworkStore)
+    : `<div class="media-preview media-preview--collection"><span>//</span></div>`;
+  return `<article class="library-collection-card" ${item.ref ? `data-open-collection="${escapeHtml(item.ref)}"` : ""}>
+    <div class="library-collection-cover">${preview}</div>
+    <div class="library-collection-meta">
+      <div class="meta-row">
+        ${renderCollectionType(item)}
+        ${renderCollectionMode(item)}
+      </div>
+      <h4>${escapeHtml(item.title || "Untitled")}</h4>
+      <p>${escapeHtml(item.children.length === 1 ? "1 item" : `${item.children.length} items`)}</p>
+    </div>
+  </article>`;
+}
+
+function resolveOverlayCollection(snapshot: AppSnapshot, ref: string | null) {
+  if (!ref) return null;
+  for (const item of snapshot.feed) {
+    if (item.collectionRef === ref && item.post) return item.post;
   }
-  if (snapshot.activeSection === "upload") {
-    return `<section class="section-block"><div class="sheet">${blockTitle("Upload / Publish", "Create an immutable media object, sign the metadata, and publish it to the shared prototype graph.")}<form id="upload-form" class="form-grid"><div class="form-grid cols-2"><div class="field"><label for="upload-title">Title</label><input id="upload-title" name="title" placeholder="Signal piece title" required></div><div class="field"><label for="upload-type">Media type</label><select id="upload-type" name="mediaType"><option value="image">image</option><option value="audio">audio</option><option value="video">video</option><option value="text">text</option></select></div></div><div class="field"><label for="upload-description">Description</label><textarea id="upload-description" name="description" placeholder="What is this object and why publish it?"></textarea></div><div class="field"><label for="upload-file">Media file</label><input id="upload-file" name="file" type="file" required></div><div class="button-row"><button class="button-primary" type="submit">Publish media object</button></div></form></div></section>`;
+  for (const item of snapshot.library.collections || []) {
+    if (item.ref === ref) return item;
   }
-  if (snapshot.activeSection === "collections") {
-    const media = Object.values(state.network.media).sort(sortDesc);
-    return `<section class="section-block"><div class="sheet">${blockTitle("Collection Editor", "Collections are the primary organizing unit. Curated sets keep the collection creator and original media creators visible at the same time.")}<div class="collection-editor"><div class="collection-shelf"><h4 class="subsection-title">Media Shelf</h4>${media.map(item => `<article class="collection-item-card"><div class="meta-row"><span class="pill">${escapeHtml(item.mediaType)}</span><span class="pill-ghost">${escapeHtml(shortId(item.creatorAccountId))}</span></div><h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.description || "No description")}</p><div class="button-row"><button class="button-secondary" data-add-draft-child="${escapeHtml(item.id)}">Add</button></div></article>`).join("")}</div><div class="collection-draft"><form id="collection-form" class="form-grid"><div class="field"><label for="collection-title">Title</label><input id="collection-title" name="title" placeholder="Cross-account set" required></div><div class="form-grid cols-2"><div class="field"><label for="collection-type">Type</label><select id="collection-type" name="type"><option value="playlist">playlist</option><option value="gallery">gallery</option><option value="album">album</option><option value="series">series</option><option value="book">book</option><option value="folder">folder</option><option value="curated">curated</option></select></div><div class="field"><label for="collection-curated">Mode</label><select id="collection-curated" name="isCurated"><option value="false">Original collection</option><option value="true">Curated collection</option></select></div></div><div class="field"><label for="collection-description">Description</label><textarea id="collection-description" name="description" placeholder="Describe the organizing idea and why these items belong together."></textarea></div><div class="button-row"><button class="button-primary" type="submit">Publish collection</button><button class="button-ghost" type="button" data-reset-draft="true">Clear draft</button></div></form><div class="sheet"><h4 class="subsection-title">Ordered Draft</h4>${snapshot.draftChildren.length ? snapshot.draftChildren.map(item => `<article class="collection-item-card"><div class="meta-row"><span class="pill-ghost">${escapeHtml(item.mediaType)}</span><span class="pill-ghost">@${escapeHtml(item.creatorUsername)}</span></div><h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.description || "No description")}</p><div class="button-row"><button class="chip-button" data-move-draft-child="${escapeHtml(item.id)}" data-direction="up">Move up</button><button class="chip-button" data-move-draft-child="${escapeHtml(item.id)}" data-direction="down">Move down</button><button class="chip-button" data-remove-draft-child="${escapeHtml(item.id)}">Remove</button></div></article>`).join("") : `<div class="empty-state"><strong>No draft children yet.</strong><p class="empty-copy">Add media from the shelf to set order and publish a signed collection.</p></div>`}</div></div></div></div></section>`;
+  for (const item of snapshot.selectedProfile?.collections || []) {
+    if (item.ref === ref) return item;
   }
-  if (snapshot.activeSection === "profile") {
+  return null;
+}
+
+function renderOverlay(snapshot: AppSnapshot, state: { network: NetworkStore; local: LocalStore }) {
+  const collection = resolveOverlayCollection(snapshot, state.local.collectionOverlayRef);
+  if (collection) {
+    return `<div class="overlay-backdrop">
+      <section class="overlay-panel overlay-panel--wide" role="dialog" aria-modal="true" aria-label="${escapeHtml(collection.title || collection.type)}">
+        <div class="overlay-header">
+          <div class="overlay-copy">
+            <h3 class="subsection-title">${escapeHtml(collection.title || "Untitled")}</h3>
+            <div class="meta-row">${renderCollectionType(collection)}${renderCollectionMode(collection)}</div>
+          </div>
+          <button class="button-ghost" type="button" data-close-collection="true">Close</button>
+        </div>
+        ${renderCollectionCard(collection, state.network, { canKeepChildren: true, canKeepCollection: collection.sourceKind !== "media" })}
+      </section>
+    </div>`;
+  }
+  const mode = state.local.overlayMode;
+  if (!mode) return "";
+  if (mode === "media") {
+    return `<div class="overlay-backdrop">
+      <section class="overlay-panel" role="dialog" aria-modal="true" aria-label="Add media">
+        <div class="overlay-header"><h3 class="subsection-title">+media</h3><button class="button-ghost" type="button" data-close-overlay="true">Close</button></div>
+        <form id="upload-form" class="form-grid form-grid--stack">
+          <div class="field"><label for="upload-title">Title</label><input id="upload-title" name="title" placeholder="Optional title"></div>
+          <div class="field"><label for="upload-type">Type</label><select id="upload-type" name="mediaType"><option value="image">image</option><option value="audio">audio</option><option value="video">video</option><option value="text">text</option></select></div>
+          <div class="field"><label for="upload-description">Notes</label><textarea id="upload-description" name="description" placeholder="Optional notes"></textarea></div>
+          <div class="field"><label for="upload-file">File</label><input id="upload-file" name="file" type="file" required></div>
+          <div class="button-row"><button class="button-primary" type="submit">Add</button></div>
+        </form>
+      </section>
+    </div>`;
+  }
+  const media = (snapshot.shelfMedia || []).slice();
+  const coverOptions = (snapshot.shelfMedia || []).filter(item => item.mediaType === "image" && item.creatorAccountId === snapshot.currentAccount?.accountId);
+  return `<div class="overlay-backdrop">
+    <section class="overlay-panel overlay-panel--wide" role="dialog" aria-modal="true" aria-label="New folder">
+      <div class="overlay-header"><h3 class="subsection-title">+folder</h3><button class="button-ghost" type="button" data-close-overlay="true">Close</button></div>
+      <form id="collection-form" class="form-grid form-grid--stack">
+        <div class="field"><label for="collection-title">Title</label><input id="collection-title" name="title" placeholder="Optional title"></div>
+        <div class="field"><label for="collection-type">Type</label><select id="collection-type" name="type"><option value="folder">folder</option><option value="gallery">gallery</option><option value="playlist">playlist</option><option value="album">album</option><option value="series">series</option><option value="book">book</option><option value="curated">curated</option></select></div>
+        <div class="field"><label for="collection-description">Notes</label><textarea id="collection-description" name="description" placeholder="Optional notes"></textarea></div>
+        <div class="field"><label for="collection-cover-ref">Cover from Library</label><select id="collection-cover-ref" name="coverRef"><option value="">None</option>${coverOptions.map(item => `<option value="${escapeHtml(item.ref || item.id)}">${escapeHtml(item.title)}</option>`).join("")}</select></div>
+        <div class="field"><label for="collection-cover-file">Or Upload Cover</label><input id="collection-cover-file" name="coverFile" type="file" accept="image/*"></div>
+        <div class="button-row"><button class="button-primary" type="submit">Create</button></div>
+      </form>
+      <div class="overlay-rows">
+        <div class="sheet sheet--stack">
+          ${blockTitle("Selected")}
+          ${snapshot.draftChildren.length ? `<div class="modal-strip" data-selected-strip="true">${snapshot.draftChildren.map(item => `<article class="collection-item-card">
+            <h4>${escapeHtml(item.title)}</h4>
+            <div class="button-row"><button class="chip-button" data-move-draft-child="${escapeHtml((item as any).ref || item.id)}" data-direction="up">Up</button><button class="chip-button" data-move-draft-child="${escapeHtml((item as any).ref || item.id)}" data-direction="down">Down</button><button class="chip-button" data-remove-draft-child="${escapeHtml((item as any).ref || item.id)}">Remove</button></div>
+          </article>`).join("")}</div>` : `<div class="empty-state empty-state--tight" data-selected-strip="true"></div>`}
+        </div>
+        <div class="sheet sheet--stack">
+          ${blockTitle("Media")}
+          <div class="modal-strip" data-media-strip="true">${media.map(item => `<article class="collection-item-card">
+            <h4>${escapeHtml(item.title)}</h4>
+            <div class="meta-row"><span class="pill">${escapeHtml(item.mediaType)}</span></div>
+            <div class="button-row"><button class="button-secondary" data-add-draft-child="${escapeHtml((item as any).ref || item.id)}">Add</button></div>
+          </article>`).join("")}</div>
+        </div>
+      </div>
+    </section>
+  </div>`;
+}
+
+function renderSection(snapshot: AppSnapshot, state: { network: NetworkStore; local: LocalStore }) {
+  const activeSection = snapshot.activeSection === "upload" ? "library" : snapshot.activeSection;
+  if (activeSection === "discover") {
+    return `<section class="section-block section-block--discover">
+      <div class="sheet feed-sheet">
+        ${blockTitle("Discover", "Only items published by accounts in your followed network.")}
+        ${snapshot.feed.length ? `<div class="activity-stack">${snapshot.feed.map(item => renderFeedPostCard(item, state.network)).join("")}</div>` : `<div class="empty-state empty-state--quiet"></div>`}
+      </div>
+    </section>`;
+  }
+  if (activeSection === "library") {
+    const collections = snapshot.library.collections;
+    return `<section class="section-block section-block--library">
+      <div class="sheet">
+        <div class="library-toolbar">
+          <div class="button-row">
+            <button class="button-primary" data-open-media-modal="true">+media</button>
+            <button class="button-secondary" data-open-folder-modal="true">+folder</button>
+          </div>
+        </div>
+        ${collections.length ? `<div class="library-grid">${collections.map(item => renderLibraryCollectionCard(item)).join("")}</div>` : `<div class="empty-state empty-state--quiet"></div>`}
+      </div>
+    </section>`;
+  }
+  if (activeSection === "profile") {
     const profile = snapshot.selectedProfile;
-    if (!profile) return `<div class="empty-state"><strong>No verified profile selected.</strong><p class="empty-copy">Open a profile by account id or create a local account to publish your own signed profile.</p></div>`;
-    return `<section class="section-block"><div class="profile-hero"><div class="meta-row"><span class="pill">${profile.verified ? "signature verified" : "verification failed"}</span><span class="pill-ghost">@${escapeHtml(profile.username)}</span></div><h3>${escapeHtml(profile.displayName)}</h3><p class="section-copy">${escapeHtml(profile.bio || "No bio published yet.")}</p><div class="meta-row"><span class="account-id">${escapeHtml(profile.accountId)}</span></div></div><div class="panel-grid"><div class="sheet">${blockTitle("Published Media", "Immutable media objects authored by this account.")}<div class="media-grid">${profile.uploads.length ? profile.uploads.map(item => `<article class="media-card">${previewHtml(item, state.network)}<div class="meta-row"><span class="pill">${escapeHtml(item.mediaType)}</span><span class="pill-ghost">creator ${escapeHtml(shortId(item.creatorAccountId))}</span></div><h4>${escapeHtml(item.title)}</h4><div class="button-row"><button class="button-secondary" data-keep-media="${escapeHtml(item.id)}">Keep + seed</button><button class="button-ghost" data-add-draft-child="${escapeHtml(item.id)}">Add to collection draft</button></div></article>`).join("") : `<div class="empty-state"><strong>No uploads yet.</strong><p class="empty-copy">This profile has not published any immutable media objects yet.</p></div>`}</div></div><div class="sheet">${blockTitle("Collections", "Original and curated collections signed by the collection creator.")}<div class="simple-list">${profile.collections.length ? profile.collections.map(item => `<article class="simple-item"><div class="meta-row"><span class="pill">${escapeHtml(item.type)}</span><span class="pill-ghost">${item.isCurated ? "curated" : "original"}</span></div><h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.description || "No description")}</p><div class="meta-stack"><span class="mini-caption">Collection creator: @${escapeHtml(item.creatorUsername)}</span><span class="mini-caption">Child creators: ${escapeHtml(item.childCreatorUsernames.join(", ") || "none")}</span></div></article>`).join("") : `<div class="empty-state"><strong>No collections yet.</strong><p class="empty-copy">Use the collection editor to publish original or curated sets.</p></div>`}</div></div></div></section>`;
+    if (!profile) return `<div class="empty-state empty-state--quiet"></div>`;
+    const isOwnProfile = snapshot.currentAccount?.accountId === profile.accountId;
+    return `<section class="section-block section-block--profile">
+      <div class="profile-hero">
+        <div class="profile-hero-main">
+          <div class="profile-avatar" aria-hidden="true">${escapeHtml(profile.displayName.slice(0, 1) || profile.username.slice(0, 1) || "Y")}</div>
+          <div class="profile-copy">
+            <span class="profile-handle">@${escapeHtml(profile.username)}</span>
+            <h3>${escapeHtml(profile.displayName)}</h3>
+            ${profile.bio ? `<p class="section-copy">${escapeHtml(profile.bio)}</p>` : ""}
+          </div>
+        </div>
+        <div class="profile-summary">
+          <article class="stat-card"><strong>Folders</strong><span>${profile.collections.length}</span></article>
+          ${!isOwnProfile ? `<button class="button-primary" data-follow-account="${escapeHtml(profile.accountId)}">Follow</button>` : ""}
+        </div>
+      </div>
+      <div class="profile-layout profile-layout--rows">
+        <div class="sheet">
+          ${blockTitle(isOwnProfile ? "Library" : `${profile.displayName}'s Library`)}
+          ${profile.collections.length ? `<div class="post-stack">${profile.collections.map(item => renderCollectionCard(item, state.network, { canKeepChildren: !isOwnProfile, canKeepCollection: !isOwnProfile, clickable: true })).join("")}</div>` : `<div class="empty-state empty-state--quiet"></div>`}
+        </div>
+      </div>
+    </section>`;
   }
-  return `<section class="section-block"><div class="section-grid"><div class="sheet">${blockTitle("Followed Feed", "Uploads, collections, keeps, and follow actions from accounts you follow.")}${snapshot.feed.length ? `<div class="activity-stack">${snapshot.feed.map(item => `<article class="activity-card"><div class="meta-row"><span class="pill">${escapeHtml(item.kind)}</span><span class="pill-ghost">${escapeHtml(item.actorUsername)}</span><span class="pill-ghost">${escapeHtml(shortId(item.actorAccountId))}</span></div><h4>${escapeHtml(item.subjectTitle)}</h4><p>${escapeHtml(item.summary)}</p><div class="meta-row"><span class="mini-caption">${escapeHtml(item.createdAt)}</span></div></article>`).join("")}</div>` : `<div class="empty-state"><strong>No followed activity yet.</strong><p class="empty-copy">Follow a verified account to make the feed resolve their signed uploads, collections, keeps, and follow actions.</p></div>`}</div><div class="sheet">${blockTitle("Suggested Next Steps", "The vertical slice is centered on identity, signed state, and authorship.")}<div class="simple-list"><article class="simple-item"><h4>1. Follow a demo account</h4><p>The feed stays identity-first: actor account ids drive resolution, usernames are display only.</p></article><article class="simple-item"><h4>2. Publish media</h4><p>Every media object is immutable. New bytes mean a new object id and new signed metadata.</p></article><article class="simple-item"><h4>3. Curate across creators</h4><p>Collection authorship and media authorship remain separate and visible in both data and UI.</p></article></div></div></div></section>`;
+  return renderSection({ ...snapshot, activeSection: "discover" }, state);
 }
 
 async function fileToInput(file: File, mediaType: string) {
@@ -584,31 +969,249 @@ async function fileToInput(file: File, mediaType: string) {
   return { title: file.name.replace(/\.[^.]+$/, ""), description: "", mediaType, fileName: file.name, dataUrl, textPreview: null };
 }
 
-async function renderApp(root: HTMLElement, controller: ReturnType<typeof createAppController>) {
+const NAV_ITEMS: Array<[SectionName, string]> = [
+  ["discover", "Discover"],
+  ["library", "Library"],
+  ["profile", "Profile"]
+];
+
+function renderBrandLockup() {
+  return `<div class="brand-lockup"><h1 class="brand-title">///yolk</h1></div>`;
+}
+
+function renderNavigation(snapshot: AppSnapshot) {
+  const active = snapshot.activeSection === "upload" ? "library" : snapshot.activeSection;
+  return `<nav class="nav-stack top-nav">${NAV_ITEMS.map(([id, title]) => `<button class="nav-button ${active === id ? "is-active" : ""}" data-nav="${id}"><strong>${escapeHtml(title)}</strong></button>`).join("")}</nav>`;
+}
+
+function renderIdentityChip(snapshot: AppSnapshot, variant: "full" | "compact" = "full") {
+  return `<div class="identity-chip identity-chip--${variant}"><h3>${escapeHtml(snapshot.currentAccount?.displayName || "Your profile")}</h3><p>${escapeHtml(snapshot.currentAccount ? `@${snapshot.currentAccount.username}` : "Create a profile")}</p></div>`;
+}
+
+function renderOnboarding() {
+  return `<div class="onboarding"><div class="onboarding-card"><h2 class="brand-title">Yolk</h2><form id="onboarding-form" class="sheet form-grid"><div class="field"><label for="onboarding-username">Username</label><input id="onboarding-username" name="username" placeholder="alice" required></div><div class="field"><label for="onboarding-display-name">Display name</label><input id="onboarding-display-name" name="displayName" placeholder="Alice Atlas" required></div><div class="field"><label for="onboarding-bio">Bio</label><textarea id="onboarding-bio" name="bio" placeholder="Say something short"></textarea></div><div class="button-row"><button class="button-primary" type="submit">Create account</button></div></form></div></div>`;
+}
+
+function renderShell(snapshot: AppSnapshot, state: { network: NetworkStore; local: LocalStore }) {
+  const flash = snapshot.flashMessage ? `<div class="flash">${escapeHtml(snapshot.flashMessage)} <button class="button-ghost" data-dismiss-flash="true">Dismiss</button></div>` : "";
+  const section = renderSection(snapshot, state);
+  return `<div class="app-shell"><header class="shell-header shell-header--app"><div class="header-stack">${renderBrandLockup()}${renderNavigation(snapshot)}</div>${renderIdentityChip(snapshot, "compact")}</header><main class="main-panel">${flash}${section}</main>${renderOverlay(snapshot, state)}</div>`;
+}
+
+function createApiController(storage: StorageLike) {
+  const clientStorageKey = "yolk.client-id";
+  let lastSnapshot: AppSnapshot | null = null;
+  const clientId = storage.getItem(clientStorageKey) || (globalThis.crypto?.randomUUID?.() || `client-${Date.now()}`);
+  storage.setItem(clientStorageKey, clientId);
+  const rawLayout = storage.getItem(LIBRARY_LAYOUT_STORAGE_KEY);
+  let parsedLayout: Record<string, { x: number; y: number }> = {};
+  if (rawLayout) {
+    try { parsedLayout = JSON.parse(rawLayout); } catch { parsedLayout = {}; }
+  }
+  const localState = {
+    currentAccountId: null as string | null,
+    collectionDraftChildIds: [] as string[],
+    libraryLayout: parsedLayout,
+    overlayMode: null as "media" | "folder" | null,
+    collectionOverlayRef: null as string | null
+  };
+  const request = async (url: string, init?: RequestInit) => {
+    const response = await fetch(url, init);
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    return response.json();
+  };
+  const syncFromSnapshot = (snapshot: AppSnapshot) => {
+    lastSnapshot = snapshot;
+    localState.currentAccountId = snapshot.currentAccount?.accountId || null;
+    localState.collectionDraftChildIds = (snapshot.draftChildren || []).map(item => ((item as any).ref || item.id));
+  };
+  const postAction = async (type: string, payload: Record<string, unknown> = {}) => {
+    const body = await request("/api/action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clientId, type, ...payload })
+    });
+    return body.result;
+  };
+  const assetUrlForRef = (ref?: string) => ref ? `/api/media?clientId=${encodeURIComponent(clientId)}&mediaRef=${encodeURIComponent(ref)}` : null;
+  const decorateLibraryItem = <T extends LibraryItem>(item: T): T => ({
+    ...item,
+    assetUrl: (item as any).kind === "collection" || item.mediaType === "text" ? null : assetUrlForRef(item.ref)
+  });
+  const decorateWorkspaceItem = (item: WorkspaceItem): WorkspaceItem => ({
+    ...decorateLibraryItem(item),
+    coverAssetUrl: item.coverRef ? assetUrlForRef(item.coverRef) : null
+  });
+  const decorateCollection = (collection: ProfileSummary["collections"][number]) => ({
+    ...collection,
+    children: collection.children.map(child => ({
+      ...child,
+      assetUrl: child.kind === "media" && child.mediaType !== "text" ? assetUrlForRef(child.ref) : null
+    }))
+  });
+  const decorateSnapshot = (snapshot: AppSnapshot): AppSnapshot => ({
+    ...snapshot,
+    library: {
+      ...snapshot.library,
+      keptMedia: snapshot.library.keptMedia.map(item => decorateLibraryItem(item as LibraryItem)),
+      items: snapshot.library.items.map(item => decorateWorkspaceItem(item as WorkspaceItem)),
+      collections: (snapshot.library.collections || []).map(item => decorateCollection(item))
+    },
+    draftChildren: snapshot.draftChildren.map(item => decorateLibraryItem(item as LibraryItem)),
+    shelfMedia: (snapshot.shelfMedia || []).map(item => decorateLibraryItem(item as LibraryItem & { ref?: string })),
+    selectedProfile: snapshot.selectedProfile
+      ? {
+          ...snapshot.selectedProfile,
+          collections: snapshot.selectedProfile.collections.map(item => decorateCollection(item))
+        }
+      : null,
+    feed: snapshot.feed.map(item => ({
+      ...item,
+      post: item.post ? decorateCollection(item.post) : item.post
+    }))
+  });
+  return {
+    async initialize() {
+      const snapshot = await this.buildSnapshot();
+      syncFromSnapshot(snapshot);
+    },
+    async buildSnapshot() {
+      const snapshot = decorateSnapshot(await request(`/api/snapshot?clientId=${encodeURIComponent(clientId)}`));
+      syncFromSnapshot(snapshot);
+      return snapshot as AppSnapshot;
+    },
+    getState() {
+      return {
+        network: {} as NetworkStore,
+        local: { currentAccountId: localState.currentAccountId, collectionDraftChildIds: localState.collectionDraftChildIds, libraryLayout: localState.libraryLayout, overlayMode: localState.overlayMode, collectionOverlayRef: localState.collectionOverlayRef } as any
+      };
+    },
+    async createAccount(input: { username: string; displayName: string; bio: string }) { return postAction("createAccount", { input }); },
+    async openProfile(accountId: string) { return postAction("openProfile", { accountId }); },
+    async followAccount(accountId: string) { return postAction("followAccount", { accountId }); },
+    async keepMedia(mediaRef: string) { return postAction("keepMedia", { mediaRef }); },
+    async keepCollection(collectionRef: string) { return postAction("keepCollection", { collectionRef }); },
+    async uploadMedia(input: { title: string; description: string; mediaType: string; fileName: string; dataUrl: string | null; textPreview: string | null }) {
+      const dataBase64 = input.dataUrl
+        ? input.dataUrl.split(",")[1] || ""
+        : btoa(input.textPreview || "");
+      return postAction("uploadMedia", {
+        input: {
+          title: input.title,
+          description: input.description,
+          mediaType: input.mediaType,
+          fileName: input.fileName,
+          dataBase64
+        }
+      });
+    },
+    async createCollection(input: { title: string; type: string; description: string; isCurated: boolean; childIds: string[]; coverId?: string | null }) {
+      return postAction("createCollection", {
+        input: {
+          title: input.title,
+          type: input.type,
+          description: input.description,
+          isCurated: input.isCurated,
+          childRefs: input.childIds,
+          coverMediaRef: input.coverId || null
+        }
+      });
+    },
+    async setSection(section: SectionName) { return postAction("setSection", { section }); },
+    async dismissFlash() { return postAction("dismissFlash"); },
+    openOverlay(mode: "media" | "folder") { localState.overlayMode = mode; localState.collectionOverlayRef = null; },
+    closeOverlay() { localState.overlayMode = null; },
+    openCollection(ref: string) { localState.collectionOverlayRef = ref; localState.overlayMode = null; },
+    closeCollection() { localState.collectionOverlayRef = null; },
+    setLibraryTilePosition(ref: string, x: number, y: number) {
+      localState.libraryLayout[ref] = { x, y };
+      storage.setItem(LIBRARY_LAYOUT_STORAGE_KEY, JSON.stringify(localState.libraryLayout));
+    },
+    async addDraftChild(mediaRef: string) { return postAction("addDraftChild", { mediaRef }); },
+    async removeDraftChild(mediaRef: string) { return postAction("removeDraftChild", { mediaRef }); },
+    async moveDraftChild(mediaRef: string, direction: "up" | "down") { return postAction("moveDraftChild", { mediaRef, direction }); },
+    async resetDraft() { return postAction("resetDraft"); }
+  };
+}
+
+async function renderApp(root: HTMLElement, controller: ReturnType<typeof createAppController> | ReturnType<typeof createApiController>) {
   const snapshot = await controller.buildSnapshot();
   const state = controller.getState();
-  root.innerHTML = `<div class="app-shell"><aside class="sidebar"><div class="brand-lockup"><span class="brand-pill">desktop-first prototype</span><h1 class="brand-title">Yolk</h1><p class="brand-copy">A decentralized media graph where public keys are identity, account heads are mutable pointers, and collections are the main publishing surface.</p></div><nav class="nav-stack">${[["home", "Home / Feed", "Followed uploads, keeps, and collections."], ["discover", "Discover", "Search labels, resolve by account id."], ["library", "Library", "Keeps are local saves with seeding intent."], ["profile", "Profile", "Verified profile, uploads, and collections."], ["upload", "Upload / Create", "Publish immutable media metadata."], ["collections", "Collection Editor", "Compose original or curated sets."]].map(([id, title, copy]) => `<button class="nav-button ${snapshot.activeSection === id ? "is-active" : ""}" data-nav="${id}"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(copy)}</span></button>`).join("")}</nav><div class="identity-chip"><h3>${escapeHtml(snapshot.currentAccount?.displayName || "No local account yet")}</h3><p>${escapeHtml(snapshot.currentAccount ? `@${snapshot.currentAccount.username}` : "Create a keypair to start publishing signed state.")}</p><span class="account-id">${escapeHtml(snapshot.currentAccount?.accountId || "public key identity will appear here")}</span></div></aside><main class="main-panel"><section class="main-hero"><div class="hero-copy"><div class="meta-row"><span class="pill">public-key identity</span><span class="pill">signed account state</span><span class="pill">framework-free UI</span></div><h2>Publishing, discovery, curation, and keeping all follow the same rule: trust the account id first.</h2><p>The prototype keeps the network model intentionally simple: a mutable account head acts like a DHT-backed pointer, profiles and records are signed, media is immutable, and keeps are saved locally with seeding intent.</p></div><div class="hero-metrics"><article class="stat-card"><strong>Accounts</strong><span>${snapshot.network.accounts}</span></article><article class="stat-card"><strong>Media Objects</strong><span>${snapshot.network.media}</span></article><article class="stat-card"><strong>Collections</strong><span>${snapshot.network.collections}</span></article><article class="stat-card"><strong>Keeps</strong><span>${snapshot.network.keeps}</span></article><article class="stat-card"><strong>Follows</strong><span>${snapshot.network.follows}</span></article></div></section>${snapshot.flashMessage ? `<div class="flash">${escapeHtml(snapshot.flashMessage)} <button class="button-ghost" data-dismiss-flash="true">Dismiss</button></div>` : ""}${renderSection(snapshot, state)}</main><div class="detail-rail"><div class="section-block"><h3>Trust Model</h3><p class="detail-note">Canonical identity is always the public-key-derived account id. Profiles are mutable signed views, not the root source of truth.</p></div><div class="trust-list"><article class="trust-item"><strong>Selected Account</strong><p>${escapeHtml(snapshot.trust.selectedAccountId || "None selected")}</p></article><article class="trust-item"><strong>Mutable DHT Head</strong><p>${escapeHtml(snapshot.trust.selectedProfileRef || "No head yet")}</p></article><article class="trust-item"><strong>Head Sequence</strong><p>${snapshot.trust.selectedHeadSeq ?? "n/a"}</p></article><article class="trust-item"><strong>Verification Status</strong><p>${snapshot.trust.verifiedProfile ? "Verified against account key" : "Not verified"}</p></article></div><div class="section-block"><h3>Non-negotiables</h3><div class="simple-list"><article class="simple-item"><h4>Username is not identity</h4><p>Search can surface a label. Verification still resolves by account id through the signed head.</p></article><article class="simple-item"><h4>Keep = save + seed</h4><p>The prototype stores keeps locally and treats them as seeding intent, even though swarm transport is mocked.</p></article><article class="simple-item"><h4>Curation preserves authorship</h4><p>The collection creator and every referenced media creator remain separate fields and UI badges.</p></article></div></div></div></div>${snapshot.currentAccount ? "" : `<div class="onboarding"><div class="onboarding-card"><span class="brand-pill">create your first account</span><div class="onboarding-grid"><div class="section-block"><h2 class="brand-title">Generate a keypair and publish a signed profile.</h2><p class="section-copy">Usernames are only labels. The generated public key becomes the canonical identity, and the profile is published as signed state behind a mutable account head.</p><div class="simple-list"><article class="simple-item"><h4>Identity</h4><p>Public key-derived account id is the root source of truth.</p></article><article class="simple-item"><h4>Profile</h4><p>Username, display name, and bio become a signed public page for that identity.</p></article><article class="simple-item"><h4>Network</h4><p>A seeded demo graph is already available for discovery, browsing, following, and curation once your account exists.</p></article></div></div><form id="onboarding-form" class="sheet form-grid"><div class="field"><label for="onboarding-username">Username</label><input id="onboarding-username" name="username" placeholder="alice" required></div><div class="field"><label for="onboarding-display-name">Display name</label><input id="onboarding-display-name" name="displayName" placeholder="Alice Atlas" required></div><div class="field"><label for="onboarding-bio">Bio</label><textarea id="onboarding-bio" name="bio" placeholder="What do you publish or collect?"></textarea></div><div class="button-row"><button class="button-primary" type="submit">Create account</button></div></form></div></div></div>`}`;
+  root.innerHTML = `${renderShell(snapshot, state)}${snapshot.currentAccount ? "" : renderOnboarding()}`;
 }
 
 export async function startApp(root: HTMLElement, storage: StorageLike = window.localStorage) {
-  const controller = createAppController(storage);
+  const controller = createApiController(storage);
   await controller.initialize();
+  let dragState: { ref: string; offsetX: number; offsetY: number } | null = null;
   root.addEventListener("click", async event => {
-    const target = (event.target as HTMLElement)?.closest?.("button");
+    const target = (event.target as HTMLElement)?.closest?.("[data-nav],[data-open-compose],[data-open-media-modal],[data-open-folder-modal],[data-close-overlay],[data-close-collection],[data-dismiss-flash],[data-open-profile],[data-open-collection],[data-follow-account],[data-keep-media],[data-keep-collection],[data-add-draft-child],[data-remove-draft-child],[data-move-draft-child],[data-reset-draft]") as HTMLElement | null;
     if (!target) return;
     let handled = true;
-    if (target.dataset.nav) controller.setSection(target.dataset.nav as SectionName);
-    else if (target.dataset.dismissFlash) controller.dismissFlash();
+    if (target.dataset.nav === "profile") {
+      const currentAccountId = controller.getState().local.currentAccountId;
+      if (currentAccountId) {
+        await controller.openProfile(currentAccountId);
+        await controller.dismissFlash();
+      } else await controller.setSection("profile");
+    }
+    else if (target.dataset.nav) await controller.setSection(target.dataset.nav as SectionName);
+    else if (target.dataset.openCompose) await controller.setSection("upload");
+    else if (target.dataset.openMediaModal) (controller as any).openOverlay?.("media");
+    else if (target.dataset.openFolderModal) (controller as any).openOverlay?.("folder");
+    else if (target.dataset.closeOverlay) (controller as any).closeOverlay?.();
+    else if (target.dataset.closeCollection) (controller as any).closeCollection?.();
+    else if (target.dataset.dismissFlash) await controller.dismissFlash();
     else if (target.dataset.openProfile) await controller.openProfile(target.dataset.openProfile);
+    else if (target.dataset.openCollection) (controller as any).openCollection?.(target.dataset.openCollection);
     else if (target.dataset.followAccount) { try { await controller.followAccount(target.dataset.followAccount); } catch (error) { console.error(error); } }
     else if (target.dataset.keepMedia) { try { await controller.keepMedia(target.dataset.keepMedia); } catch (error) { console.error(error); } }
-    else if (target.dataset.addDraftChild) controller.addDraftChild(target.dataset.addDraftChild);
-    else if (target.dataset.removeDraftChild) controller.removeDraftChild(target.dataset.removeDraftChild);
-    else if (target.dataset.moveDraftChild) controller.moveDraftChild(target.dataset.moveDraftChild, (target.dataset.direction as "up" | "down") || "up");
-    else if (target.dataset.resetDraft) controller.resetDraft();
+    else if (target.dataset.keepCollection) { try { await (controller as any).keepCollection(target.dataset.keepCollection); } catch (error) { console.error(error); } }
+    else if (target.dataset.addDraftChild) await controller.addDraftChild(target.dataset.addDraftChild);
+    else if (target.dataset.removeDraftChild) await controller.removeDraftChild(target.dataset.removeDraftChild);
+    else if (target.dataset.moveDraftChild) await controller.moveDraftChild(target.dataset.moveDraftChild, (target.dataset.direction as "up" | "down") || "up");
+    else if (target.dataset.resetDraft) await controller.resetDraft();
     else handled = false;
     if (!handled) return;
     await renderApp(root, controller);
+  });
+  root.addEventListener("pointerdown", event => {
+    const tile = (event.target as HTMLElement)?.closest?.("[data-library-tile]") as HTMLElement | null;
+    if (!tile) return;
+    if ((event.target as HTMLElement)?.closest?.("button, audio, video")) return;
+    const ref = tile.dataset.libraryTile;
+    if (!ref) return;
+    const rect = tile.getBoundingClientRect();
+    dragState = {
+      ref,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top
+    };
+    tile.setPointerCapture?.(event.pointerId);
+  });
+  root.addEventListener("pointermove", event => {
+    if (!dragState) return;
+    const workspace = root.querySelector(".library-workspace") as HTMLElement | null;
+    const tile = root.querySelector(`[data-library-tile="${CSS.escape(dragState.ref)}"]`) as HTMLElement | null;
+    if (!workspace || !tile) return;
+    const rect = workspace.getBoundingClientRect();
+    const x = Math.max(12, event.clientX - rect.left - dragState.offsetX);
+    const y = Math.max(12, event.clientY - rect.top - dragState.offsetY);
+    tile.style.left = `${x}px`;
+    tile.style.top = `${y}px`;
+  });
+  root.addEventListener("pointerup", event => {
+    if (!dragState) return;
+    const workspace = root.querySelector(".library-workspace") as HTMLElement | null;
+    if (!workspace) {
+      dragState = null;
+      return;
+    }
+    const rect = workspace.getBoundingClientRect();
+    const x = Math.max(12, event.clientX - rect.left - dragState.offsetX);
+    const y = Math.max(12, event.clientY - rect.top - dragState.offsetY);
+    (controller as any).setLibraryTilePosition?.(dragState.ref, x, y);
+    dragState = null;
   });
   root.addEventListener("submit", async event => {
     const form = event.target as HTMLFormElement;
@@ -617,11 +1220,6 @@ export async function startApp(root: HTMLElement, storage: StorageLike = window.
     if (form.id === "onboarding-form") {
       const data = new FormData(form);
       await controller.createAccount({ username: String(data.get("username") || ""), displayName: String(data.get("displayName") || ""), bio: String(data.get("bio") || "") });
-    } else if (form.id === "search-form") {
-      const data = new FormData(form);
-      const accountId = String(data.get("accountId") || "").trim();
-      if (accountId) await controller.openProfile(accountId);
-      else { await controller.search(String(data.get("query") || "")); controller.setSection("discover"); }
     } else if (form.id === "upload-form") {
       const data = new FormData(form);
       const file = data.get("file");
@@ -631,12 +1229,22 @@ export async function startApp(root: HTMLElement, storage: StorageLike = window.
         upload.title = String(data.get("title") || upload.title);
         upload.description = String(data.get("description") || "");
         await controller.uploadMedia(upload);
-        controller.setSection("profile");
+        (controller as any).closeOverlay?.();
       }
     } else if (form.id === "collection-form") {
       const data = new FormData(form);
       const draftChildren = controller.getState().local.collectionDraftChildIds.slice();
-      await controller.createCollection({ title: String(data.get("title") || ""), type: String(data.get("type") || ""), description: String(data.get("description") || ""), isCurated: String(data.get("isCurated") || "false") === "true", childIds: draftChildren });
+      let coverId = String(data.get("coverRef") || "") || null;
+      const coverFile = data.get("coverFile");
+      if (!coverId && coverFile instanceof File && coverFile.size) {
+        const coverUpload = await fileToInput(coverFile, "image");
+        coverUpload.title = `${String(data.get("title") || coverUpload.title || "Cover")} Cover`;
+        const result = await controller.uploadMedia(coverUpload);
+        coverId = (result as any)?.mediaRef || null;
+      }
+      const collectionType = String(data.get("type") || "folder");
+      await controller.createCollection({ title: String(data.get("title") || ""), type: collectionType, description: String(data.get("description") || ""), isCurated: collectionType === "curated", childIds: draftChildren, coverId });
+      (controller as any).closeOverlay?.();
     }
     await renderApp(root, controller);
   }, { capture: true });

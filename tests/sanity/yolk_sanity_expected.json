@@ -1,50 +1,53 @@
 {
   "cases": [
     {
-      "id": "profile_lookup_by_account_id_field",
-      "activeSection": "Profile",
+      "id": "profile_opens_from_discovery",
+      "activeSection": "Discover",
       "currentIdentity": {
         "displayName": "Alice Atlas",
         "username": "alice"
       },
-      "profile": {
-        "username": "sol",
-        "displayName": "Sol Mercer",
-        "verifiedStatus": "signature verified"
-      },
-      "trust": {
-        "verificationStatus": "Verified against account key"
-      }
+      "overlayTitle": "Harbor Studies"
     },
     {
-      "id": "followed_activity_visible_in_feed",
-      "activeSection": "Home / Feed",
+      "id": "followed_posts_visible_in_feed",
+      "activeSection": "Discover",
       "feedIncludes": [
         {
-          "kind": "follow",
-          "actorUsername": "alice"
+          "actorUsername": "noor",
+          "subjectTitle": "Afterglass"
         },
         {
-          "actorUsername": "noor"
+          "actorUsername": "sol",
+          "subjectTitle": "Harbor Studies"
         }
       ]
     },
     {
       "id": "keep_media_flows_into_library",
       "activeSection": "Library",
-      "libraryTitles": ["Amber Lines"],
-      "flashTextIncludes": ["Keep recorded"]
+      "libraryTitles": ["Amber Lines"]
+    },
+    {
+      "id": "like_feed_post_saves_library",
+      "activeSection": "Library",
+      "libraryTitles": ["Crossfade Relay"]
+    },
+    {
+      "id": "open_feed_post_opens_profile",
+      "activeSection": "Discover",
+      "overlayTitle": "Afterglass"
     },
     {
       "id": "upload_media_and_publish_original_collection",
       "activeSection": "Profile",
       "profile": {
         "username": "alice",
-        "uploadTitles": ["Protocol Notes"],
-        "collections": [
+        "posts": [
           {
             "title": "Protocol Packet",
             "mode": "original",
+            "childTitles": ["Protocol Notes"],
             "childCreators": "alice"
           }
         ]
@@ -55,10 +58,11 @@
       "activeSection": "Profile",
       "profile": {
         "username": "alice",
-        "collections": [
+        "posts": [
           {
             "title": "Signal Stack",
             "mode": "curated",
+            "childTitles": ["Amber Lines", "Night Transit"],
             "childCreators": "sol, noor"
           }
         ]
@@ -66,38 +70,20 @@
     },
     {
       "id": "full_program_journey",
-      "activeSection": "Home / Feed",
+      "activeSection": "Discover",
       "currentIdentity": {
         "username": "alice"
       },
       "feedIncludes": [
         {
-          "kind": "follow",
-          "actorUsername": "alice"
+          "actorUsername": "noor",
+          "subjectTitle": "Afterglass"
         },
         {
-          "kind": "keep",
-          "actorUsername": "alice"
-        },
-        {
-          "kind": "upload",
-          "actorUsername": "alice"
-        },
-        {
-          "kind": "collection",
-          "actorUsername": "alice"
-        },
-        {
-          "actorUsername": "noor"
+          "actorUsername": "sol",
+          "subjectTitle": "Harbor Studies"
         }
-      ],
-      "stats": {
-        "accounts": "3",
-        "media": "4",
-        "collections": "3",
-        "keeps": "2",
-        "follows": "2"
-      }
+      ]
     }
   ]
 }
