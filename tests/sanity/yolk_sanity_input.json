@@ -1,7 +1,7 @@
 {
   "cases": [
     {
-      "id": "verified_profile_lookup_by_account_id",
+      "id": "profile_lookup_by_account_id_field",
       "actions": [
         {
           "type": "createAccount",
@@ -10,13 +10,26 @@
           "bio": "Collector and prototype host."
         },
         {
-          "type": "openProfile",
-          "accountRef": "demo:sol"
+          "type": "gotoSection",
+          "section": "discover"
+        },
+        {
+          "type": "search",
+          "query": "sol"
+        },
+        {
+          "type": "saveSearchResultAccountId",
+          "username": "sol",
+          "as": "solAccountId"
+        },
+        {
+          "type": "openLookupAccountId",
+          "from": "solAccountId"
         }
       ]
     },
     {
-      "id": "keep_creates_local_library_entry",
+      "id": "followed_activity_visible_in_feed",
       "actions": [
         {
           "type": "createAccount",
@@ -25,8 +38,84 @@
           "bio": "Collector and prototype host."
         },
         {
-          "type": "keep",
-          "mediaRef": "media:sol:1"
+          "type": "gotoSection",
+          "section": "discover"
+        },
+        {
+          "type": "search",
+          "query": "noor"
+        },
+        {
+          "type": "followSearchResult",
+          "username": "noor"
+        },
+        {
+          "type": "gotoSection",
+          "section": "home"
+        }
+      ]
+    },
+    {
+      "id": "keep_media_flows_into_library",
+      "actions": [
+        {
+          "type": "createAccount",
+          "username": "alice",
+          "displayName": "Alice Atlas",
+          "bio": "Collector and prototype host."
+        },
+        {
+          "type": "gotoSection",
+          "section": "discover"
+        },
+        {
+          "type": "search",
+          "query": "sol"
+        },
+        {
+          "type": "openSearchResult",
+          "username": "sol"
+        },
+        {
+          "type": "keepProfileMedia",
+          "title": "Amber Lines"
+        }
+      ]
+    },
+    {
+      "id": "upload_media_and_publish_original_collection",
+      "actions": [
+        {
+          "type": "createAccount",
+          "username": "alice",
+          "displayName": "Alice Atlas",
+          "bio": "Collector and prototype host."
+        },
+        {
+          "type": "gotoSection",
+          "section": "upload"
+        },
+        {
+          "type": "uploadTextMedia",
+          "title": "Protocol Notes",
+          "description": "A field note upload from the real browser flow.",
+          "fileName": "protocol-notes.txt",
+          "content": "Signal log alpha. Field note beta. This upload is used by the end-to-end sanity flow."
+        },
+        {
+          "type": "gotoSection",
+          "section": "collections"
+        },
+        {
+          "type": "addShelfMedia",
+          "title": "Protocol Notes"
+        },
+        {
+          "type": "publishCollection",
+          "title": "Protocol Packet",
+          "collectionType": "folder",
+          "description": "Alice originals only.",
+          "isCurated": false
         }
       ]
     },
@@ -40,17 +129,28 @@
           "bio": "Collector and prototype host."
         },
         {
-          "type": "createCollection",
+          "type": "gotoSection",
+          "section": "collections"
+        },
+        {
+          "type": "addShelfMedia",
+          "title": "Amber Lines"
+        },
+        {
+          "type": "addShelfMedia",
+          "title": "Night Transit"
+        },
+        {
+          "type": "publishCollection",
           "title": "Signal Stack",
           "collectionType": "curated",
           "description": "A cross-account curated set.",
-          "isCurated": true,
-          "children": ["media:sol:1", "media:noor:0"]
+          "isCurated": true
         }
       ]
     },
     {
-      "id": "follow_brings_activity_into_feed",
+      "id": "full_program_journey",
       "actions": [
         {
           "type": "createAccount",
@@ -59,8 +159,66 @@
           "bio": "Collector and prototype host."
         },
         {
-          "type": "follow",
-          "accountRef": "demo:noor"
+          "type": "gotoSection",
+          "section": "discover"
+        },
+        {
+          "type": "search",
+          "query": "noor"
+        },
+        {
+          "type": "followSearchResult",
+          "username": "noor"
+        },
+        {
+          "type": "gotoSection",
+          "section": "discover"
+        },
+        {
+          "type": "search",
+          "query": "sol"
+        },
+        {
+          "type": "openSearchResult",
+          "username": "sol"
+        },
+        {
+          "type": "keepProfileMedia",
+          "title": "Amber Lines"
+        },
+        {
+          "type": "gotoSection",
+          "section": "upload"
+        },
+        {
+          "type": "uploadTextMedia",
+          "title": "Dock Memo",
+          "description": "Uploaded during the full end-to-end journey.",
+          "fileName": "dock-memo.txt",
+          "content": "Dock memo for the full sanity run."
+        },
+        {
+          "type": "gotoSection",
+          "section": "collections"
+        },
+        {
+          "type": "addShelfMedia",
+          "title": "Amber Lines"
+        },
+        {
+          "type": "addShelfMedia",
+          "title": "Dock Memo"
+        },
+        {
+          "type": "publishCollection",
+          "title": "Dock Session",
+          "collectionType": "curated",
+          "description": "A curated mix of demo and local work.",
+          "isCurated": true
+        },
+        {
+          "type": "gotoSection",
+          "section": "home"
         }
       ]
     }

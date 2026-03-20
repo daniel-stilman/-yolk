@@ -1,57 +1,103 @@
 {
   "cases": [
     {
-      "id": "verified_profile_lookup_by_account_id",
-      "selectedProfile": {
+      "id": "profile_lookup_by_account_id_field",
+      "activeSection": "Profile",
+      "currentIdentity": {
+        "displayName": "Alice Atlas",
+        "username": "alice"
+      },
+      "profile": {
         "username": "sol",
         "displayName": "Sol Mercer",
-        "verified": true
+        "verifiedStatus": "signature verified"
       },
       "trust": {
-        "resolvedViaDhtHead": true,
-        "verifiedProfile": true
-      },
-      "network": {
-        "accounts": 3
+        "verificationStatus": "Verified against account key"
       }
     },
     {
-      "id": "keep_creates_local_library_entry",
-      "library": {
-        "keptCount": 1,
-        "keptTitles": ["Amber Lines"]
-      },
-      "feed": [
+      "id": "followed_activity_visible_in_feed",
+      "activeSection": "Home / Feed",
+      "feedIncludes": [
         {
-          "kind": "keep"
+          "kind": "follow",
+          "actorUsername": "alice"
+        },
+        {
+          "actorUsername": "noor"
         }
       ]
     },
     {
-      "id": "curated_collection_preserves_original_authorship",
-      "selectedProfile": {
+      "id": "keep_media_flows_into_library",
+      "activeSection": "Library",
+      "libraryTitles": ["Amber Lines"],
+      "flashTextIncludes": ["Keep recorded"]
+    },
+    {
+      "id": "upload_media_and_publish_original_collection",
+      "activeSection": "Profile",
+      "profile": {
         "username": "alice",
+        "uploadTitles": ["Protocol Notes"],
         "collections": [
           {
-            "title": "Signal Stack",
-            "isCurated": true,
-            "childCreatorUsernames": ["sol", "noor"]
+            "title": "Protocol Packet",
+            "mode": "original",
+            "childCreators": "alice"
           }
         ]
       }
     },
     {
-      "id": "follow_brings_activity_into_feed",
-      "feed": [
-        {
-          "kind": "follow"
-        }
-      ],
+      "id": "curated_collection_preserves_original_authorship",
+      "activeSection": "Profile",
+      "profile": {
+        "username": "alice",
+        "collections": [
+          {
+            "title": "Signal Stack",
+            "mode": "curated",
+            "childCreators": "sol, noor"
+          }
+        ]
+      }
+    },
+    {
+      "id": "full_program_journey",
+      "activeSection": "Home / Feed",
+      "currentIdentity": {
+        "username": "alice"
+      },
       "feedIncludes": [
+        {
+          "kind": "follow",
+          "actorUsername": "alice"
+        },
+        {
+          "kind": "keep",
+          "actorUsername": "alice"
+        },
+        {
+          "kind": "upload",
+          "actorUsername": "alice"
+        },
+        {
+          "kind": "collection",
+          "actorUsername": "alice"
+        },
         {
           "actorUsername": "noor"
         }
-      ]
+      ],
+      "stats": {
+        "accounts": "3",
+        "media": "4",
+        "collections": "3",
+        "keeps": "2",
+        "follows": "2"
+      }
     }
   ]
 }

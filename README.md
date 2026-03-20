@@ -143,18 +143,20 @@ npm test
 The suite has two layers:
 
 1. Targeted controller/model assertions in `tests/app.test.mjs`
-2. Curated sanity fixtures in `tests/sanity/`
+2. Real browser + running-backend sanity fixtures in `tests/e2e.test.mjs`
 
 The sanity fixture pair is authoritative:
 
 - `tests/sanity/yolk_sanity_input.json`
 - `tests/sanity/yolk_sanity_expected.json`
 
+The end-to-end harness starts `server.mjs`, opens the real app bundle in headless Edge through `playwright-core`, drives the actual DOM, and compares the rendered output against the curated expected snapshot. This is the baseline "full run of the program" check for onboarding, discovery, follows, keeps, uploads, collections, and feed rendering.
+
 When behavior changes:
 
 1. update code
 2. update targeted tests if the rule is covered there
-3. update the sanity fixture case and expected result
+3. update the browser sanity fixture case and expected result
 4. update the Behavior Index below
 5. run `npm test`
 
@@ -162,14 +164,18 @@ When behavior changes:
 
 Keep this synchronized with `tests/sanity/yolk_sanity_input.json` and `tests/sanity/yolk_sanity_expected.json`.
 
-- `verified_profile_lookup_by_account_id`
-  Opens a profile from the underlying account reference and renders the username from the verified signed profile.
-- `keep_creates_local_library_entry`
+- `profile_lookup_by_account_id_field`
+  Searches by label, captures the underlying account id, then opens the profile through the account-id lookup and verifies that the displayed username came from signed profile state.
+- `followed_activity_visible_in_feed`
+  Follows a discovered account and verifies that follow-driven activity resolves into the feed.
+- `keep_media_flows_into_library`
   A Keep action creates a signed keep record and places the media in the local kept library with seeding intent.
+- `upload_media_and_publish_original_collection`
+  Uploads a new immutable media object through the actual form flow, then publishes an original collection from the collection editor shelf.
 - `curated_collection_preserves_original_authorship`
   A curated collection can reference media by multiple creators while the collection creator remains separate from each original media creator.
-- `follow_brings_activity_into_feed`
-  Following an account makes their uploads, collections, keeps, and follow actions visible in the feed.
+- `full_program_journey`
+  Runs the main desktop journey end-to-end: create account, discover, follow, resolve profile, keep, upload, curate, and confirm feed/library/profile outputs from the live DOM.
 
 ## Notes For The Next Build
 

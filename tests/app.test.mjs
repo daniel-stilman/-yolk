@@ -1,21 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import {
   createAppController,
   createMemoryStorage,
   resolveVerifiedProfile,
-  runScenarioFixture,
   stableStringify
 } from '../dist/app.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const sanityInputPath = path.join(__dirname, 'sanity', 'yolk_sanity_input.json');
-const sanityExpectedPath = path.join(__dirname, 'sanity', 'yolk_sanity_expected.json');
 
 function createClock(startIso = '2026-01-01T00:00:00.000Z') {
   let current = new Date(startIso).getTime();
@@ -24,24 +15,6 @@ function createClock(startIso = '2026-01-01T00:00:00.000Z') {
     current += 60_000;
     return value;
   };
-}
-
-function assertSubset(actual, expected) {
-  if (Array.isArray(expected)) {
-    assert.ok(Array.isArray(actual), 'expected an array');
-    expected.forEach((entry, index) => {
-      assertSubset(actual[index], entry);
-    });
-    return;
-  }
-  if (expected && typeof expected === 'object') {
-    assert.ok(actual && typeof actual === 'object', 'expected an object');
-    for (const [key, value] of Object.entries(expected)) {
-      assertSubset(actual[key], value);
-    }
-    return;
-  }
-  assert.equal(actual, expected);
 }
 
 test('stableStringify sorts object keys deterministically', () => {
@@ -98,33 +71,4 @@ test('curated collections preserve original media authorship', async () => {
   assert.equal(snapshot.selectedProfile.collections[0].title, 'Signal Stack');
   assert.equal(snapshot.selectedProfile.collections[0].isCurated, true);
   assert.deepEqual(snapshot.selectedProfile.collections[0].childCreatorUsernames, ['sol', 'noor']);
-});
-
-test('sanity fixtures match curated expectations', async () => {
-  const input = JSON.parse(fs.readFileSync(sanityInputPath, 'utf8'));
-  const expected = JSON.parse(fs.readFileSync(sanityExpectedPath, 'utf8'));
-  const expectedMap = new Map(expected.cases.map(entry => [entry.id, entry]));
-  for (const scenario of input.cases) {
-    const snapshot = await runScenarioFixture(scenario);
-    const curated = expectedMap.get(scenario.id);
-    assert.ok(curated, `missing expected snapshot for ${scenario.id}`);
-    assert.equal(curated.id, scenario.id);
-    const { id, feedIncludes, ...expectedSubset } = curated;
-    assertSubset(snapshot, expectedSubset);
-    if (Array.isArray(feedIncludes)) {
-      feedIncludes.forEach(expectedEntry => {
-        assert.ok(
-          snapshot.feed.some(actualEntry => {
-            try {
-              assertSubset(actualEntry, expectedEntry);
-              return true;
-            } catch {
-              return false;
-            }
-          }),
-          `missing matching feed entry for ${scenario.id}: ${JSON.stringify(expectedEntry)}`
-        );
-      });
-    }
-  }
 });
