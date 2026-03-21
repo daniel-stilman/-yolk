@@ -89,6 +89,8 @@ a {
   padding: 18px 22px;
   background: var(--panel-strong);
   border-width: 2px;
+  overflow-x: visible;
+  overflow-y: hidden;
 }
 
 .header-stack {
@@ -120,7 +122,7 @@ a {
 
 .top-nav {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   width: 100%;
   gap: 18px;
   min-height: 44px;
@@ -131,32 +133,38 @@ a {
   background: transparent;
   box-shadow: none;
   flex-wrap: wrap;
+  overflow: visible;
 }
 
 .search-nav-cluster {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 12px;
-  margin-left: auto;
-  max-width: 100%;
+  position: relative;
+  flex: 0 0 auto;
 }
 
 .header-search-inline {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
-  width: min(430px, 100%);
-  margin-top: -12px;
-  padding: 12px 14px 12px;
+  position: absolute;
+  left: calc(100% + 12px);
+  top: -12px;
+  width: clamp(240px, 28vw, 380px);
+  height: 58px;
+  padding: 12px 12px 0;
   border: 2px solid var(--line);
   border-top: 0;
-  background: #0012c4;
+  background: var(--panel-strong);
   animation: searchDrawerOpen 180ms steps(4) 1;
+  z-index: 2;
 }
 
 .header-search-input {
   flex: 1 1 240px;
-  min-height: 38px;
+  min-height: 34px;
+  height: 34px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -907,13 +915,14 @@ a {
 
   .search-nav-cluster {
     width: 100%;
-    margin-left: 0;
     flex-wrap: wrap;
   }
 
   .header-search-inline {
+    position: static;
     width: 100%;
-    margin-top: 0;
+    height: 54px;
+    padding: 0 12px 10px;
     border-top: 2px solid var(--line);
   }
 }
