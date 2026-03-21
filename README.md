@@ -24,6 +24,7 @@ This application currently demonstrates:
 - account creation with a generated local keypair
 - signed profile publishing
 - profile resolution by account id through a mutable account head
+- account discovery and search by verified username or account id
 - immutable media publishing for image, audio, video, and text metadata
 - original and curated collections
 - follow records
@@ -32,14 +33,23 @@ This application currently demonstrates:
 - profile browsing with verified username/display-name rendering
 - a seeded demo network so discovery works immediately
 
-The networking and peer-to-peer transport are still simplified in parts of the app. The app uses a local mock store for:
+## Product UX Guardrails
 
-- mutable DHT-like account heads
-- signed public records
-- content/blob references
-- username discovery index
+The default product surface should be shaped around one job first: getting people to media with as little friction as possible.
 
-This keeps the identity and authorship architecture clean while the UI is still on the older in-browser controller. The new runtime is the migration target for replacing that mock path with real network-backed reads and writes.
+- Library access comes first.
+- Discovery comes second, as a way to bring more media and collections into the library.
+- Default user-facing views should not expose account ids, raw refs, trust/debug fields, transport counters, or other implementation-detail scaffolding.
+- If verification or diagnostics are needed, they belong behind an explicit dedicated affordance rather than in routine browsing and discovery UI.
+- Collections should be presented consistently across discovery, library, and profile views so saved media packages do not change shape from screen to screen.
+
+The networking and peer-to-peer transport are still simplified in parts of the app. The live browser shell now runs through the runtime-backed app service, but it still relies on:
+
+- a local bootstrap DHT node per app-service instance
+- a seeded demo network so discovery works immediately
+- a known-account graph for search and suggestions instead of a decentralized global index
+
+This keeps the identity and authorship architecture clean while the runtime hardening and wider discovery model are still being built out.
 
 ## Stack
 
@@ -98,7 +108,7 @@ Profiles are signed records stored behind a mutable `AccountHead` pointer. The c
 
 Media metadata is signed and immutable. A new file or changed bytes produce a new media object.
 
-The app stores local blob refs in the mock network, but the record model is already split between:
+The runtime stores content bytes separately from the signed metadata records, and the app service materializes previews from those immutable refs.
 
 - content/blob refs
 - signed metadata objects
@@ -132,7 +142,7 @@ The application includes:
 - `Upload / Create`
 - `Collection Editor`
 
-The UI is deliberately desktop-first and media-forward. Internally everything is keyed by account id, even when the surface shows usernames and display names.
+The UI is deliberately desktop-first and media-forward. Internally everything is keyed by account id, even when the normal surface stays focused on usernames, display names, and media packages instead of system identifiers.
 
 ## Testing
 
@@ -173,12 +183,20 @@ When behavior changes:
 
 Keep this synchronized with `tests/sanity/yolk_sanity_input.json` and `tests/sanity/yolk_sanity_expected.json`.
 
-- `profile_lookup_by_account_id_field`
-  Searches by label, captures the underlying account id, then opens the profile through the account-id lookup and verifies that the displayed username came from signed profile state.
+- `profile_opens_from_discovery`
+  Opens a collection from Discover and verifies that the collection overlay resolves from the live followed-network feed.
+- `discover_search_opens_profile`
+  Expands the header Search drawer inline from the nav, searches for a user, then opens the matching profile through the runtime-backed account lookup.
 - `followed_activity_visible_in_feed`
-  Follows a discovered account and verifies that follow-driven activity resolves into the feed.
+  The followed network resolves into Discover activity and surfaces posts from both directly followed and transitively discovered accounts.
 - `keep_media_flows_into_library`
   A Keep action creates a signed keep record and places the media in the local kept library with seeding intent.
+- `like_feed_post_saves_library`
+  Saving a collection from Discover fills the same Like control and pulls the whole package into the local library surface without changing its collection-style presentation.
+- `unlike_saved_collection_removes_library_package`
+  Removing a saved collection from the library confirms the action, un-fills the Like control, and removes the saved package from the library surface.
+- `open_feed_post_opens_profile`
+  Opening a Discover post resolves the collection overlay through the live feed payload.
 - `upload_media_and_publish_original_collection`
   Uploads a new immutable media object through the actual form flow, then publishes an original collection from the collection editor shelf.
 - `curated_collection_preserves_original_authorship`
@@ -188,8 +206,7 @@ Keep this synchronized with `tests/sanity/yolk_sanity_input.json` and `tests/san
 
 ## Notes For The Next Build
 
-- cut the UI over from the mock controller to the runtime in `runtime/p2p-runtime.mjs`
-- replace the remaining mock profile/media/collection flows in the UI with runtime-backed reads and writes
 - add device-key delegation on top of the root account key
-- deepen search/discovery without changing the identity trust order
+- widen discovery beyond the current known-account graph and local bootstrap assumptions
+- expose profile editing and richer upload/profile views on top of the runtime-backed shell
 - expand collection layout rules without breaking signed authorship boundaries

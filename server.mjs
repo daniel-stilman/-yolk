@@ -48,6 +48,7 @@ const handleAction = async (service, payload) => {
   if (!clientId) throw new Error('clientId is required');
   if (payload.type === 'createAccount') return service.createAccount(clientId, payload.input);
   if (payload.type === 'openProfile') return service.openProfile(clientId, payload.accountId);
+  if (payload.type === 'searchProfiles') return service.searchProfiles(clientId, payload.query);
   if (payload.type === 'setSection') return service.setSection(clientId, payload.section);
   if (payload.type === 'dismissFlash') return service.dismissFlash(clientId);
   if (payload.type === 'uploadMedia') {
@@ -59,6 +60,7 @@ const handleAction = async (service, payload) => {
   if (payload.type === 'createCollection') return service.createCollection(clientId, payload.input);
   if (payload.type === 'keepMedia') return service.keepMedia(clientId, payload.mediaRef);
   if (payload.type === 'keepCollection') return service.keepCollection(clientId, payload.collectionRef);
+  if (payload.type === 'unkeepCollection') return service.unkeepCollection(clientId, payload.collectionRef);
   if (payload.type === 'followAccount') return service.followAccount(clientId, payload.accountId);
   if (payload.type === 'addDraftChild') return service.addDraftChild(clientId, payload.mediaRef);
   if (payload.type === 'removeDraftChild') return service.removeDraftChild(clientId, payload.mediaRef);

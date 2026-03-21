@@ -90,6 +90,128 @@ test('keep downloads the torrent payload and continues seeding locally', async (
   }
 })
 
+test('app service discovery snapshot exposes truthful network, trust, search, and feed activity', async () => {
+  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yolk-discovery-'))
+  const clientId = 'discovery-client'
+  const sampleMediaDir = path.join(repoRoot, 'sample media')
+  const service = await AppService.create({ baseDir, sampleMediaDir })
+
+  try {
+    await service.createAccount(clientId, {
+      username: 'alice',
+      displayName: 'Alice Atlas',
+      bio: 'Collector'
+    })
+
+    let snapshot = await service.buildSnapshot(clientId)
+    assert.equal(snapshot.network.accounts, 3)
+    assert.equal(snapshot.network.media, 4)
+    assert.equal(snapshot.network.collections, 3)
+    assert.equal(snapshot.network.keeps, 1)
+    assert.equal(snapshot.network.follows, 2)
+    assert.equal(snapshot.trust.verifiedProfile, true)
+    assert.equal(snapshot.trust.resolvedViaDhtHead, false)
+    assert.ok(typeof snapshot.trust.selectedHeadSeq === 'number')
+    assert.match(snapshot.trust.selectedProfileRef || '', /^magnet:\?xt=urn:btih:/)
+    assert.ok(snapshot.suggestions.some(item => item.username === 'sol'))
+    assert.ok(snapshot.feed.some(item => item.kind === 'profile'))
+    assert.ok(snapshot.feed.some(item => item.kind === 'upload'))
+    assert.ok(snapshot.feed.some(item => item.kind === 'keep'))
+    assert.ok(snapshot.feed.some(item => item.kind === 'follow'))
+    assert.ok(snapshot.feed.some(item => item.kind === 'post' && item.subjectTitle === 'Afterglass'))
+
+    await service.searchProfiles(clientId, 'noor')
+    snapshot = await service.buildSnapshot(clientId)
+    assert.equal(snapshot.discoverQuery, 'noor')
+    assert.deepEqual(snapshot.searchResults.map(item => item.username), ['noor'])
+  } finally {
+    await service.destroy()
+    await fs.rm(baseDir, { recursive: true, force: true })
+  }
+})
+
+test('keeping a collection saves nested collection packages and media recursively', async () => {
+  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yolk-collection-keep-'))
+  const clientId = 'collection-keeper'
+  const sampleMediaDir = path.join(repoRoot, 'sample media')
+  const service = await AppService.create({ baseDir, sampleMediaDir })
+
+  try {
+    const noorId = service.demoAccounts.noor
+    const noorProfile = await service.demoRuntime.resolveProfile(noorId)
+    const [nightRef, bloomRef] = noorProfile.state.mediaRefs
+    const nested = await service.demoRuntime.publishCollection(noorId, {
+      title: 'Nested Night Set',
+      type: 'series',
+      description: 'Nested collection for recursive keep coverage.',
+      isCurated: false,
+      children: [{ kind: 'media', ref: nightRef }]
+    })
+    const parent = await service.demoRuntime.publishCollection(noorId, {
+      title: 'Nested Package',
+      type: 'curated',
+      description: 'Parent collection with a nested child collection.',
+      isCurated: true,
+      children: [
+        { kind: 'collection', ref: nested.collectionRef },
+        { kind: 'media', ref: bloomRef }
+      ]
+    })
+
+    await service.createAccount(clientId, {
+      username: 'alice',
+      displayName: 'Alice Atlas',
+      bio: 'Collector'
+    })
+    const kept = await service.keepCollection(clientId, parent.collectionRef)
+    assert.ok(kept.keptCollectionRefs.includes(parent.collectionRef))
+    assert.ok(kept.keptCollectionRefs.includes(nested.collectionRef))
+    assert.equal(kept.keptRefs.length, 2)
+
+    const snapshot = await service.buildSnapshot(clientId)
+    const saved = snapshot.library.collections.find(item => item.title === 'Nested Package')
+    assert.ok(saved, 'expected parent package in library')
+    assert.ok(saved.children.some(child => child.kind === 'collection' && child.title === 'Nested Night Set'))
+    assert.ok(snapshot.library.keptTitles.includes('Night Transit'))
+    assert.ok(snapshot.library.keptTitles.includes('Signal Bloom'))
+  } finally {
+    await service.destroy()
+    await fs.rm(baseDir, { recursive: true, force: true })
+  }
+})
+
+test('unkeeping a saved collection removes its package from the library', async () => {
+  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yolk-collection-unkeep-'))
+  const clientId = 'collection-unkeeper'
+  const sampleMediaDir = path.join(repoRoot, 'sample media')
+  const service = await AppService.create({ baseDir, sampleMediaDir })
+
+  try {
+    await service.createAccount(clientId, {
+      username: 'alice',
+      displayName: 'Alice Atlas',
+      bio: 'Collector'
+    })
+
+    const initial = await service.buildSnapshot(clientId)
+    const relay = initial.feed.find(item => item.subjectTitle === 'Crossfade Relay')
+    assert.ok(relay?.collectionRef, 'expected seeded collection in feed')
+
+    await service.keepCollection(clientId, relay.collectionRef)
+    let snapshot = await service.buildSnapshot(clientId)
+    assert.ok(snapshot.library.collections.some(item => item.title === 'Crossfade Relay'))
+    assert.deepEqual(snapshot.library.keptTitles.slice().sort(), ['Amber Lines', 'Night Transit'].sort())
+
+    await service.unkeepCollection(clientId, relay.collectionRef)
+    snapshot = await service.buildSnapshot(clientId)
+    assert.ok(!snapshot.library.collections.some(item => item.title === 'Crossfade Relay'))
+    assert.deepEqual(snapshot.library.keptTitles, [])
+  } finally {
+    await service.destroy()
+    await fs.rm(baseDir, { recursive: true, force: true })
+  }
+})
+
 test('runtime restart republishes account heads and restores torrent availability', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'yolk-restart-'))
   let bootstrap = await createBootstrapNode()

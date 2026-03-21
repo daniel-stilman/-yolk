@@ -16,6 +16,25 @@
       ]
     },
     {
+      "id": "discover_search_opens_profile",
+      "actions": [
+        {
+          "type": "createAccount",
+          "username": "alice",
+          "displayName": "Alice Atlas",
+          "bio": "Collector and host."
+        },
+        {
+          "type": "searchDiscover",
+          "query": "noor"
+        },
+        {
+          "type": "openSuggested",
+          "username": "noor"
+        }
+      ]
+    },
+    {
       "id": "followed_posts_visible_in_feed",
       "actions": [
         {
@@ -65,6 +84,29 @@
         {
           "type": "gotoSection",
           "section": "library"
+        }
+      ]
+    },
+    {
+      "id": "unlike_saved_collection_removes_library_package",
+      "actions": [
+        {
+          "type": "createAccount",
+          "username": "alice",
+          "displayName": "Alice Atlas",
+          "bio": "Collector and host."
+        },
+        {
+          "type": "likeFeedPost",
+          "title": "Crossfade Relay"
+        },
+        {
+          "type": "gotoSection",
+          "section": "library"
+        },
+        {
+          "type": "unlikeLibraryPost",
+          "title": "Crossfade Relay"
         }
       ]
     },

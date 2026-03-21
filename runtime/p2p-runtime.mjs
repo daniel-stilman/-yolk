@@ -371,6 +371,18 @@ export class P2PRuntime {
     })
   }
 
+  async removeTorrent(torrentId) {
+    const existing = await this.client.get(torrentId)
+    if (!existing) return false
+    await new Promise((resolve, reject) => {
+      this.client.remove(torrentId, { destroyStore: true }, error => {
+        if (error) reject(error)
+        else resolve(null)
+      })
+    })
+    return true
+  }
+
   async seedJsonRecord(prefix, recordId, value) {
     const filePath = path.join(this.metaDir, prefix, `${recordId}.json`)
     await writeJson(filePath, value)
@@ -679,5 +691,34 @@ export class P2PRuntime {
     const verified = verifyRecord(keep.accountId, keep)
     if (!verified) throw new Error(`Keep signature failed for ${keep.id}`)
     return { keep, verified }
+  }
+
+  async removeKeep(accountId, mediaRef) {
+    const account = this.requireAccount(accountId)
+    const previousState = await this.resolveState(accountId)
+    const keepEntries = await Promise.all(previousState.state.keepRefs.map(async keepRef => {
+      const resolved = await this.resolveKeep(keepRef).catch(() => null)
+      return resolved ? { keepRef, keep: resolved.keep } : null
+    }))
+    const target = keepEntries.find(entry => entry?.keep?.mediaRef === mediaRef)
+    if (!target) return { removed: false, mediaRef }
+
+    const { media } = await this.resolveMedia(mediaRef)
+    const targetPath = path.join(this.downloadDir, account.accountId, media.id)
+    const torrent = await this.client.get(media.contentRef)
+    if (torrent && path.resolve(torrent.path) === path.resolve(targetPath)) {
+      await this.removeTorrent(media.contentRef)
+    }
+    await fs.rm(targetPath, { recursive: true, force: true })
+
+    const state = createEmptyAccountState(accountId, account.publicKeyHex, previousState.state)
+    state.profileRef = previousState.state.profileRef
+    state.mediaRefs = previousState.state.mediaRefs
+    state.collectionRefs = previousState.state.collectionRefs
+    state.followRefs = previousState.state.followRefs
+    state.keepRefs = previousState.state.keepRefs.filter(keepRef => keepRef !== target.keepRef)
+    state.activities = previousState.state.activities
+    await this.publishAccountState(accountId, state)
+    return { removed: true, mediaRef, media }
   }
 }

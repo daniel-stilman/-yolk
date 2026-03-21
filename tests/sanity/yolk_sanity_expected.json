@@ -10,6 +10,18 @@
       "overlayTitle": "Harbor Studies"
     },
     {
+      "id": "discover_search_opens_profile",
+      "activeSection": "Profile",
+      "currentIdentity": {
+        "displayName": "Alice Atlas",
+        "username": "alice"
+      },
+      "profile": {
+        "username": "noor",
+        "displayName": "Noor Vale"
+      }
+    },
+    {
       "id": "followed_posts_visible_in_feed",
       "activeSection": "Discover",
       "feedIncludes": [
@@ -26,12 +38,34 @@
     {
       "id": "keep_media_flows_into_library",
       "activeSection": "Library",
-      "libraryTitles": ["Amber Lines"]
+      "libraryTitles": ["Amber Lines"],
+      "libraryPosts": [
+        {
+          "title": "Amber Lines",
+          "childTitles": ["Amber Lines"],
+          "childCreators": "sol"
+        }
+      ]
     },
     {
       "id": "like_feed_post_saves_library",
       "activeSection": "Library",
-      "libraryTitles": ["Crossfade Relay"]
+      "libraryTitles": ["Crossfade Relay"],
+      "libraryLikedTitles": ["Crossfade Relay"],
+      "libraryPosts": [
+        {
+          "title": "Crossfade Relay",
+          "childTitles": ["Amber Lines", "Night Transit"],
+          "childCreators": "sol, noor"
+        }
+      ]
+    },
+    {
+      "id": "unlike_saved_collection_removes_library_package",
+      "activeSection": "Library",
+      "libraryTitlesExact": [],
+      "libraryLikedTitles": [],
+      "flashTextIncludes": ["Removed from library."]
     },
     {
       "id": "open_feed_post_opens_profile",

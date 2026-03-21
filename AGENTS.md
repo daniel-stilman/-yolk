@@ -12,6 +12,15 @@ Purpose: the canonical operating prompt for this repo. Keep shared process, qual
 - Small, safe diffs beat broad rewrites.
 - Visible behavior changes must update code, tests, fixtures, and docs together.
 
+## Product UX Guardrails
+
+- Build the default UI from the perspective of a person who wants fast, low-friction access to media.
+- Library consumption comes first. Discovery exists to help people bring more media into their libraries, not to foreground system mechanics.
+- Do not expose implementation-detail data in normal user surfaces unless the feature explicitly calls for it.
+- Internal identifiers, trust/debug fields, transport counters, account/network totals, raw refs, and similar scaffolding must stay out of the default UI.
+- If verification or diagnostics are needed later, put them behind an explicit dedicated affordance. Do not leak them into routine browsing, search, library, or discovery flows.
+- User-facing collection surfaces should stay visually consistent across discovery, library, and profile views unless there is a strong product reason to differentiate them.
+
 ## Monolithic Default
 
 When starting a new feature, bias toward one well-structured core file instead of premature module sprawl.
@@ -113,6 +122,7 @@ When behavior changes:
 - Scope is clear.
 - Monolithic core is still navigable.
 - IO remains isolated from pure logic where practical.
+- The default UI stays media-first and avoids implementation-detail clutter.
 - Targeted tests were added or updated.
 - Sanity fixtures and README Behavior Index were updated for behavior changes.
 - Full suite was run after the change.

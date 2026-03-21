@@ -133,11 +133,15 @@ function shelfCard(page, title) {
 }
 
 function profileMediaCard(page, title) {
-  return page.locator(`.post-child-card[data-media-title="${title}"]`).first();
+  return page.locator(`.overlay-panel .post-child-card[data-media-title="${title}"]`).first();
 }
 
 function feedPostCard(page, title) {
   return page.locator(`.activity-card.feed-post-card[data-feed-title="${title}"]`).first();
+}
+
+function libraryPostCard(page, title) {
+  return page.locator('.section-block--library .post-card').filter({ hasText: title }).first();
 }
 
 async function runAction(page, action, memory) {
@@ -149,6 +153,14 @@ async function runAction(page, action, memory) {
     await page.locator(`[data-nav="${action.section}"]`).click();
     await expectActiveSection(page, action.section);
     await page.waitForTimeout(500);
+    return;
+  }
+  if (action.type === 'searchDiscover') {
+    await page.locator('button[data-toggle-search="true"]').click();
+    await page.locator('#header-search-form').waitFor();
+    await page.locator('#header-search-query').fill(action.query);
+    await page.locator('#header-search-form button[type="submit"]').click();
+    await page.locator('[data-search-results="true"]').waitFor();
     return;
   }
   if (action.type === 'openCompose') {
@@ -163,7 +175,7 @@ async function runAction(page, action, memory) {
   }
   if (action.type === 'openSuggested') {
     const card = simpleCard(page, action.username);
-    await card.locator('button[data-open-profile]').click();
+    await card.locator('button.button-secondary[data-open-profile]').click();
     await expectActiveSection(page, 'profile');
     await page.waitForTimeout(500);
     return;
@@ -188,7 +200,17 @@ async function runAction(page, action, memory) {
   if (action.type === 'likeFeedPost') {
     const card = feedPostCard(page, action.title);
     await card.locator('button[data-keep-collection]').click();
-    await page.waitForTimeout(1200);
+    await card.locator('button[data-unkeep-collection]').waitFor();
+    return;
+  }
+  if (action.type === 'unlikeLibraryPost') {
+    const card = libraryPostCard(page, action.title);
+    page.once('dialog', dialog => dialog.accept());
+    await card.locator('button[data-unkeep-collection]').click();
+    await page.waitForFunction(title => {
+      return !Array.from(document.querySelectorAll('.section-block--library .post-card h4'))
+        .some(node => node.textContent?.trim() === title);
+    }, action.title, { timeout: 10000 });
     return;
   }
   if (action.type === 'openFeedPost') {
@@ -262,7 +284,17 @@ async function collectSnapshot(page) {
         username: text('.identity-chip p').replace(/^@/, '')
       },
       flashText: text('.flash'),
-      libraryTitles: Array.from(document.querySelectorAll('.library-collection-card h4, .library-tile h4, .saved-grid .media-card h4')).map(node => textFrom(node)),
+      libraryTitles: Array.from(document.querySelectorAll('.section-block--library .post-card h4, .library-collection-card h4, .library-tile h4, .saved-grid .media-card h4')).map(node => textFrom(node)),
+      libraryLikedTitles: Array.from(document.querySelectorAll('.section-block--library .post-card')).flatMap(node => {
+        if (!node.querySelector('button[data-unkeep-collection]')) return [];
+        const title = textFrom(node.querySelector('h4'));
+        return title ? [title] : [];
+      }),
+      libraryPosts: Array.from(document.querySelectorAll('.section-block--library .post-card')).map(node => ({
+        title: textFrom(node.querySelector('h4')),
+        childTitles: Array.from(node.querySelectorAll('.post-child-card h5')).map(textFrom),
+        childCreators: Array.from(node.querySelectorAll('.post-child-card .profile-link')).map(textFrom).map(value => value.replace(/^@/, '')).join(', ')
+      })),
       feed: Array.from(document.querySelectorAll('.activity-card')).map(card => {
         return {
           actorUsername: textFrom(card.querySelector('.feed-post-head .profile-link, .profile-link')).replace(/^@/, ''),
@@ -303,6 +335,24 @@ function verifyScenarioSnapshot(actual, expected, scenarioId) {
   if (Array.isArray(expected.libraryTitles)) {
     expected.libraryTitles.forEach(title => {
       assert.ok(actual.libraryTitles.includes(title), `${scenarioId}: missing library title ${title}`);
+    });
+  }
+  if (Array.isArray(expected.libraryTitlesExact)) {
+    assert.deepEqual(actual.libraryTitles, expected.libraryTitlesExact, `${scenarioId}: libraryTitles`);
+  }
+  if (Array.isArray(expected.libraryLikedTitles)) {
+    assert.deepEqual(actual.libraryLikedTitles, expected.libraryLikedTitles, `${scenarioId}: libraryLikedTitles`);
+  }
+  if (Array.isArray(expected.libraryPosts)) {
+    expected.libraryPosts.forEach(expectedPost => {
+      const actualPost = actual.libraryPosts.find(item => item.title === expectedPost.title);
+      assert.ok(actualPost, `${scenarioId}: missing library post ${expectedPost.title}`);
+      if (Array.isArray(expectedPost.childTitles)) {
+        assert.deepEqual(actualPost.childTitles, expectedPost.childTitles, `${scenarioId}: library childTitles for ${expectedPost.title} were ${JSON.stringify(actualPost.childTitles)}`);
+      }
+      if (typeof expectedPost.childCreators === 'string') {
+        assert.equal(actualPost.childCreators, expectedPost.childCreators, `${scenarioId}: library childCreators for ${expectedPost.title} were ${JSON.stringify(actualPost.childCreators)}`);
+      }
     });
   }
   if (Array.isArray(expected.feedIncludes)) {
