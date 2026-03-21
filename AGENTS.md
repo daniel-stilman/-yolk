@@ -18,8 +18,10 @@ Purpose: the canonical operating prompt for this repo. Keep shared process, qual
 - Library consumption comes first. Discovery exists to help people bring more media into their libraries, not to foreground system mechanics.
 - Do not expose implementation-detail data in normal user surfaces unless the feature explicitly calls for it.
 - Internal identifiers, trust/debug fields, transport counters, account/network totals, raw refs, and similar scaffolding must stay out of the default UI.
+- Do not ship placeholder stat strips, demo counters, or diagnostic summaries as part of the normal browsing surface. If a user would not actively seek it out to consume or organize media, it likely does not belong in the default UI.
 - If verification or diagnostics are needed later, put them behind an explicit dedicated affordance. Do not leak them into routine browsing, search, library, or discovery flows.
 - User-facing collection surfaces should stay visually consistent across discovery, library, and profile views unless there is a strong product reason to differentiate them.
+- Library browsing should behave like a familiar media/file explorer: folders drill down in place, and leaf media opens directly. Do not route ordinary library navigation through popups or modal detours.
 
 ## Monolithic Default
 

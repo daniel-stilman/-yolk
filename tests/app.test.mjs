@@ -49,7 +49,7 @@ test('keep action produces a kept library entry', async () => {
   const snapshot = await controller.buildSnapshot();
   assert.equal(snapshot.library.keptCount, 1);
   assert.equal(snapshot.library.keptTitles[0], 'Amber Lines');
-  assert.equal(snapshot.feed[0].kind, 'keep');
+  assert.ok(snapshot.feed.every(item => item.kind === 'post'));
 });
 
 test('curated collections preserve original media authorship', async () => {

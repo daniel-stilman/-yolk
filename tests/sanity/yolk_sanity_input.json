@@ -46,7 +46,7 @@
       ]
     },
     {
-      "id": "keep_media_flows_into_library",
+      "id": "download_media_flows_into_library",
       "actions": [
         {
           "type": "createAccount",
@@ -65,11 +65,15 @@
         {
           "type": "gotoSection",
           "section": "library"
+        },
+        {
+          "type": "openLibraryFolder",
+          "title": "Art"
         }
       ]
     },
     {
-      "id": "like_feed_post_saves_library",
+      "id": "download_feed_post_flows_into_library",
       "actions": [
         {
           "type": "createAccount",
@@ -78,17 +82,25 @@
           "bio": "Collector and host."
         },
         {
-          "type": "likeFeedPost",
-          "title": "Crossfade Relay"
+          "type": "downloadFeedPost",
+          "title": "Night Transit"
         },
         {
           "type": "gotoSection",
           "section": "library"
+        },
+        {
+          "type": "openLibraryFolder",
+          "title": "Movies"
+        },
+        {
+          "type": "openLibraryFolder",
+          "title": "Night Transit"
         }
       ]
     },
     {
-      "id": "unlike_saved_collection_removes_library_package",
+      "id": "remove_downloaded_collection_removes_library_package",
       "actions": [
         {
           "type": "createAccount",
@@ -97,16 +109,24 @@
           "bio": "Collector and host."
         },
         {
-          "type": "likeFeedPost",
-          "title": "Crossfade Relay"
+          "type": "downloadFeedPost",
+          "title": "Night Transit"
         },
         {
           "type": "gotoSection",
           "section": "library"
         },
         {
-          "type": "unlikeLibraryPost",
-          "title": "Crossfade Relay"
+          "type": "openLibraryFolder",
+          "title": "Movies"
+        },
+        {
+          "type": "openLibraryFolder",
+          "title": "Night Transit"
+        },
+        {
+          "type": "removeDownloadedLibraryPost",
+          "title": "Night Transit"
         }
       ]
     },
@@ -121,83 +141,101 @@
         },
         {
           "type": "openFeedPost",
-          "title": "Afterglass"
-        }
-      ]
-    },
-    {
-      "id": "upload_media_and_publish_original_collection",
-      "actions": [
-        {
-          "type": "createAccount",
-          "username": "alice",
-          "displayName": "Alice Atlas",
-          "bio": "Collector and host."
-        },
-        {
-          "type": "gotoSection",
-          "section": "library"
-        },
-        {
-          "type": "openCompose"
-        },
-        {
-          "type": "uploadTextMedia",
-          "title": "Protocol Notes",
-          "description": "A field note upload from the real browser flow.",
-          "fileName": "protocol-notes.txt",
-          "content": "Signal log alpha. Field note beta. This upload is used by the end-to-end sanity flow."
-        },
-        {
-          "type": "openFolderComposer"
-        },
-        {
-          "type": "publishCollection",
-          "title": "Protocol Packet",
-          "collectionType": "folder",
-          "description": "Alice originals only.",
-          "isCurated": false
-        },
-        {
-          "type": "gotoSection",
-          "section": "profile"
-        }
-      ]
-    },
-    {
-      "id": "curated_collection_preserves_original_authorship",
-      "actions": [
-        {
-          "type": "createAccount",
-          "username": "alice",
-          "displayName": "Alice Atlas",
-          "bio": "Collector and host."
-        },
-        {
-          "type": "gotoSection",
-          "section": "library"
-        },
-        {
-          "type": "openFolderComposer"
-        },
-        {
-          "type": "addShelfMedia",
-          "title": "Amber Lines"
-        },
-        {
-          "type": "addShelfMedia",
           "title": "Night Transit"
-        },
+        }
+      ]
+    },
+    {
+      "id": "structured_upload_places_package_in_library",
+      "actions": [
         {
-          "type": "publishCollection",
-          "title": "Signal Stack",
-          "collectionType": "curated",
-          "description": "A cross-account curated set.",
-          "isCurated": true
+          "type": "createAccount",
+          "username": "alice",
+          "displayName": "Alice Atlas",
+          "bio": "Collector and host."
         },
         {
           "type": "gotoSection",
-          "section": "profile"
+          "section": "library"
+        },
+        {
+          "type": "openUploadComposer"
+        },
+        {
+          "type": "publishStructuredUpload",
+          "packageKind": "show",
+          "description": "A structured show package from the real browser flow.",
+          "seriesTitle": "Signal Bureau",
+          "seasonLabel": "Season 1",
+          "rows": [
+            {
+              "fileName": "episode-2.txt",
+              "content": "Episode 2 payload from the real browser flow.",
+              "title": "Episode 2"
+            },
+            {
+              "fileName": "episode-1.txt",
+              "content": "Episode 1 payload from the real browser flow.",
+              "title": "Episode 1"
+            }
+          ],
+          "reorder": {
+            "sourceTitle": "Episode 2",
+            "targetTitle": "Episode 1"
+          }
+        }
+      ]
+    },
+    {
+      "id": "library_clicks_through_canonical_folders",
+      "actions": [
+        {
+          "type": "createAccount",
+          "username": "alice",
+          "displayName": "Alice Atlas",
+          "bio": "Collector and host."
+        },
+        {
+          "type": "gotoSection",
+          "section": "library"
+        },
+        {
+          "type": "openUploadComposer"
+        },
+        {
+          "type": "publishStructuredUpload",
+          "packageKind": "show",
+          "description": "A browseable show package.",
+          "seriesTitle": "Signal Bureau",
+          "seasonLabel": "Season 1",
+          "rows": [
+            {
+              "fileName": "episode-2.txt",
+              "content": "Episode 2 payload for folder browsing.",
+              "title": "Episode 2"
+            },
+            {
+              "fileName": "episode-1.txt",
+              "content": "Episode 1 payload for folder browsing.",
+              "title": "Episode 1"
+            }
+          ],
+          "reorder": {
+            "sourceTitle": "Episode 2",
+            "targetTitle": "Episode 1"
+          }
+        },
+        {
+          "type": "openLibraryFolder",
+          "title": "Shows"
+        },
+        {
+          "type": "openLibraryFolder",
+          "title": "Signal Bureau"
+        },
+        {
+          "type": "openLibraryFolder",
+          "title": "Season 1"
         }
       ]
     },
@@ -223,32 +261,20 @@
           "section": "library"
         },
         {
-          "type": "openCompose"
+          "type": "openUploadComposer"
         },
         {
-          "type": "uploadTextMedia",
+          "type": "publishStructuredUpload",
+          "packageKind": "movie",
           "title": "Dock Memo",
           "description": "Uploaded during the full end-to-end journey.",
-          "fileName": "dock-memo.txt",
-          "content": "Dock memo for the full sanity run."
-        },
-        {
-          "type": "openFolderComposer"
-        },
-        {
-          "type": "addShelfMedia",
-          "title": "Amber Lines"
-        },
-        {
-          "type": "addShelfMedia",
-          "title": "Dock Memo"
-        },
-        {
-          "type": "publishCollection",
-          "title": "Dock Session",
-          "collectionType": "curated",
-          "description": "A curated mix of demo and local work.",
-          "isCurated": true
+          "rows": [
+            {
+              "fileName": "dock-memo.txt",
+              "content": "Dock memo for the full sanity run.",
+              "title": "Dock Memo"
+            }
+          ]
         },
         {
           "type": "gotoSection",

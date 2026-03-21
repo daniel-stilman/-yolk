@@ -140,8 +140,12 @@ function feedPostCard(page, title) {
   return page.locator(`.activity-card.feed-post-card[data-feed-title="${title}"]`).first();
 }
 
-function libraryPostCard(page, title) {
-  return page.locator('.section-block--library .post-card').filter({ hasText: title }).first();
+function libraryFolderTile(page, title) {
+  return page.locator('.section-block--library .library-folder-tile').filter({ hasText: title }).first();
+}
+
+function libraryMediaTile(page, title) {
+  return page.locator(`.section-block--library .library-media-tile[data-library-media-title="${title}"]`).first();
 }
 
 async function runAction(page, action, memory) {
@@ -163,7 +167,7 @@ async function runAction(page, action, memory) {
     await page.locator('[data-search-results="true"]').waitFor();
     return;
   }
-  if (action.type === 'openCompose') {
+  if (action.type === 'openCompose' || action.type === 'openUploadComposer') {
     await page.locator('button[data-open-media-modal]').click();
     await page.locator('#upload-form').waitFor();
     return;
@@ -173,23 +177,44 @@ async function runAction(page, action, memory) {
     await page.locator('#collection-form').waitFor();
     return;
   }
+  if (action.type === 'openLibraryFolder') {
+    await libraryFolderTile(page, action.title).click();
+    await page.waitForFunction(title => {
+      const current = document.querySelector('.section-block--library .library-path-current');
+      return (current?.textContent?.trim() || '') === title;
+    }, action.title, { timeout: 10000 });
+    return;
+  }
   if (action.type === 'openSuggested') {
-    const card = simpleCard(page, action.username);
+    const searchScope = page.locator('[data-search-results="true"]');
+    const card = await searchScope.count()
+      ? searchScope.locator('.simple-item').filter({ hasText: `@${action.username}` }).first()
+      : simpleCard(page, action.username);
     await card.locator('button.button-secondary[data-open-profile]').click();
     await expectActiveSection(page, 'profile');
     await page.waitForTimeout(500);
     return;
   }
   if (action.type === 'followSuggested') {
-    const card = simpleCard(page, action.username);
+    const searchScope = page.locator('[data-search-results="true"]');
+    const card = await searchScope.count()
+      ? searchScope.locator('.simple-item').filter({ hasText: `@${action.username}` }).first()
+      : simpleCard(page, action.username);
     await card.locator('button[data-follow-account]').click();
     await page.waitForTimeout(1000);
     return;
   }
   if (action.type === 'keepProfileMedia') {
     const card = profileMediaCard(page, action.title);
-    await card.locator('button[data-keep-media]').click();
-    await page.waitForTimeout(1000);
+    const button = card.locator('button[data-keep-media]');
+    await button.scrollIntoViewIfNeeded();
+    await button.evaluate(node => node.click());
+    await page.waitForFunction(title => {
+      const cardNode = document.querySelector(`.overlay-panel .post-child-card[data-media-title="${title}"]`);
+      const pressed = cardNode?.querySelector('button[data-keep-media]')?.getAttribute('aria-pressed') === 'true';
+      const flash = document.querySelector('.flash')?.textContent?.includes('Downloaded and seeding.');
+      return Boolean(pressed || flash);
+    }, action.title, { timeout: 15000 });
     const close = page.locator('button[data-close-collection]');
     if (await close.count()) {
       await close.click();
@@ -197,18 +222,18 @@ async function runAction(page, action, memory) {
     }
     return;
   }
-  if (action.type === 'likeFeedPost') {
+  if (action.type === 'likeFeedPost' || action.type === 'downloadFeedPost') {
     const card = feedPostCard(page, action.title);
     await card.locator('button[data-keep-collection]').click();
     await card.locator('button[data-unkeep-collection]').waitFor();
     return;
   }
-  if (action.type === 'unlikeLibraryPost') {
-    const card = libraryPostCard(page, action.title);
+  if (action.type === 'unlikeLibraryPost' || action.type === 'removeDownloadedLibraryPost') {
     page.once('dialog', dialog => dialog.accept());
-    await card.locator('button[data-unkeep-collection]').click();
+    await page.locator('.section-block--library .library-browser-head button[data-unkeep-collection]').click();
     await page.waitForFunction(title => {
-      return !Array.from(document.querySelectorAll('.section-block--library .post-card h4'))
+      return !Array.from(document.querySelectorAll('.section-block--library .library-folder-tile h4'))
+        .concat(Array.from(document.querySelectorAll('.section-block--library .library-media-tile h4')))
         .some(node => node.textContent?.trim() === title);
     }, action.title, { timeout: 10000 });
     return;
@@ -231,6 +256,76 @@ async function runAction(page, action, memory) {
     });
     await page.locator('#upload-form button[type="submit"]').click();
     await page.waitForTimeout(1200);
+    return;
+  }
+  if (action.type === 'publishStructuredUpload') {
+    if (action.packageKind) {
+      await page.locator('#upload-kind').selectOption(action.packageKind);
+      if (action.packageKind === 'show') {
+        await page.locator('#upload-series-title').waitFor();
+        await page.locator('#upload-season-label').waitFor();
+      } else if (action.packageKind === 'graphic_novel') {
+        await page.locator('#upload-series-title').waitFor();
+        await page.locator('#upload-title').waitFor();
+      }
+    }
+    if (typeof action.description === 'string') {
+      await page.locator('#upload-description').fill(action.description);
+    }
+    const maybeFill = async (selector, value) => {
+      if (typeof value !== 'string') return;
+      const field = page.locator(selector);
+      if (await field.count()) await field.fill(value);
+    };
+    await maybeFill('#upload-title', action.title);
+    await maybeFill('#upload-series-title', action.seriesTitle);
+    await maybeFill('#upload-season-label', action.seasonLabel);
+    await page.locator('#upload-files').setInputFiles(action.rows.map(row => ({
+      name: row.fileName,
+      mimeType: row.mimeType || 'text/plain',
+      buffer: Buffer.from(row.content, 'utf8')
+    })));
+    await page.locator('.upload-draft-row').nth(action.rows.length - 1).waitFor();
+    for (let index = 0; index < action.rows.length; index += 1) {
+      if (!action.rows[index]?.title) continue;
+      await page.locator('[data-upload-row-title]').nth(index).fill(action.rows[index].title);
+    }
+    if (action.reorder?.sourceTitle && action.reorder?.targetTitle) {
+      const rowCount = await page.locator('.upload-draft-row').count();
+      let sourceIndex = -1;
+      let targetIndex = -1;
+      for (let index = 0; index < rowCount; index += 1) {
+        const value = await page.locator('[data-upload-row-title]').nth(index).inputValue();
+        if (value === action.reorder.sourceTitle) sourceIndex = index;
+        if (value === action.reorder.targetTitle) targetIndex = index;
+      }
+      if (sourceIndex < 0 || targetIndex < 0) throw new Error(`Unable to resolve upload reorder rows for ${action.reorder.sourceTitle} -> ${action.reorder.targetTitle}`);
+      const source = page.locator('.upload-draft-row').nth(sourceIndex).locator('[data-upload-drag-row]').first();
+      const target = page.locator('.upload-draft-row').nth(targetIndex);
+      await source.dragTo(target);
+      await page.waitForTimeout(400);
+    }
+    const expectedTitle = action.packageKind === 'show'
+      ? (action.seasonLabel || 'Season 1')
+      : action.packageKind === 'graphic_novel'
+        ? (action.title || 'Volume 1')
+        : (action.title || 'Untitled package');
+    const rootFolderLabel = action.packageKind === 'album'
+      ? 'Music'
+      : action.packageKind === 'audiobook'
+        ? 'Audiobooks'
+        : action.packageKind === 'movie'
+          ? 'Movies'
+          : action.packageKind === 'show'
+            ? 'Shows'
+            : action.packageKind === 'art'
+              ? 'Art'
+              : action.packageKind === 'graphic_novel'
+                ? 'Graphic Novels'
+                : 'Art';
+    await page.locator('#upload-form button[type="submit"]').click();
+    await page.locator('#upload-form').waitFor({ state: 'detached', timeout: 15000 });
+    await libraryFolderTile(page, rootFolderLabel).waitFor({ timeout: 15000 });
     return;
   }
   if (action.type === 'addShelfMedia') {
@@ -284,17 +379,14 @@ async function collectSnapshot(page) {
         username: text('.identity-chip p').replace(/^@/, '')
       },
       flashText: text('.flash'),
-      libraryTitles: Array.from(document.querySelectorAll('.section-block--library .post-card h4, .library-collection-card h4, .library-tile h4, .saved-grid .media-card h4')).map(node => textFrom(node)),
-      libraryLikedTitles: Array.from(document.querySelectorAll('.section-block--library .post-card')).flatMap(node => {
-        if (!node.querySelector('button[data-unkeep-collection]')) return [];
-        const title = textFrom(node.querySelector('h4'));
+      libraryFolders: Array.from(document.querySelectorAll('.section-block--library .library-folder-tile h4')).map(node => textFrom(node)),
+      libraryTitles: Array.from(document.querySelectorAll('.section-block--library .library-media-tile h4')).map(node => textFrom(node)),
+      libraryDownloadedTitles: Array.from(document.querySelectorAll('.section-block--library .library-browser-head button[data-unkeep-collection]')).flatMap(() => {
+        const current = document.querySelector('.section-block--library .library-path-current');
+        const title = textFrom(current);
         return title ? [title] : [];
       }),
-      libraryPosts: Array.from(document.querySelectorAll('.section-block--library .post-card')).map(node => ({
-        title: textFrom(node.querySelector('h4')),
-        childTitles: Array.from(node.querySelectorAll('.post-child-card h5')).map(textFrom),
-        childCreators: Array.from(node.querySelectorAll('.post-child-card .profile-link')).map(textFrom).map(value => value.replace(/^@/, '')).join(', ')
-      })),
+      libraryPosts: [],
       feed: Array.from(document.querySelectorAll('.activity-card')).map(card => {
         return {
           actorUsername: textFrom(card.querySelector('.feed-post-head .profile-link, .profile-link')).replace(/^@/, ''),
@@ -340,8 +432,11 @@ function verifyScenarioSnapshot(actual, expected, scenarioId) {
   if (Array.isArray(expected.libraryTitlesExact)) {
     assert.deepEqual(actual.libraryTitles, expected.libraryTitlesExact, `${scenarioId}: libraryTitles`);
   }
-  if (Array.isArray(expected.libraryLikedTitles)) {
-    assert.deepEqual(actual.libraryLikedTitles, expected.libraryLikedTitles, `${scenarioId}: libraryLikedTitles`);
+  if (Array.isArray(expected.libraryFolders)) {
+    assert.deepEqual(actual.libraryFolders, expected.libraryFolders, `${scenarioId}: libraryFolders`);
+  }
+  if (Array.isArray(expected.libraryDownloadedTitles)) {
+    assert.deepEqual(actual.libraryDownloadedTitles, expected.libraryDownloadedTitles, `${scenarioId}: libraryDownloadedTitles`);
   }
   if (Array.isArray(expected.libraryPosts)) {
     expected.libraryPosts.forEach(expectedPost => {

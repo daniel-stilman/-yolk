@@ -49,6 +49,7 @@ const handleAction = async (service, payload) => {
   if (payload.type === 'createAccount') return service.createAccount(clientId, payload.input);
   if (payload.type === 'openProfile') return service.openProfile(clientId, payload.accountId);
   if (payload.type === 'searchProfiles') return service.searchProfiles(clientId, payload.query);
+  if (payload.type === 'clearSearch') return service.clearSearch(clientId);
   if (payload.type === 'setSection') return service.setSection(clientId, payload.section);
   if (payload.type === 'dismissFlash') return service.dismissFlash(clientId);
   if (payload.type === 'uploadMedia') {
@@ -57,6 +58,7 @@ const handleAction = async (service, payload) => {
       data: Buffer.from(payload.input.dataBase64, 'base64')
     });
   }
+  if (payload.type === 'publishStructuredUpload') return service.publishStructuredUpload(clientId, payload.input);
   if (payload.type === 'createCollection') return service.createCollection(clientId, payload.input);
   if (payload.type === 'keepMedia') return service.keepMedia(clientId, payload.mediaRef);
   if (payload.type === 'keepCollection') return service.keepCollection(clientId, payload.collectionRef);
@@ -77,6 +79,11 @@ export async function createYolkServer(options = {}) {
   });
   const server = createServer(async (req, res) => {
     const url = new URL(req.url || '/', 'http://127.0.0.1');
+    if (url.pathname === '/favicon.ico') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
     if (url.pathname === '/api/snapshot') {
       try {
         const clientId = url.searchParams.get('clientId');

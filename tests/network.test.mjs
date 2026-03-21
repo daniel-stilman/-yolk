@@ -90,7 +90,7 @@ test('keep downloads the torrent payload and continues seeding locally', async (
   }
 })
 
-test('app service discovery snapshot exposes truthful network, trust, search, and feed activity', async () => {
+test('app service discovery snapshot exposes truthful network, trust, search, and post-only discover media', async () => {
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yolk-discovery-'))
   const clientId = 'discovery-client'
   const sampleMediaDir = path.join(repoRoot, 'sample media')
@@ -107,23 +107,77 @@ test('app service discovery snapshot exposes truthful network, trust, search, an
     assert.equal(snapshot.network.accounts, 3)
     assert.equal(snapshot.network.media, 4)
     assert.equal(snapshot.network.collections, 3)
-    assert.equal(snapshot.network.keeps, 1)
+    assert.equal(snapshot.network.keeps, 0)
     assert.equal(snapshot.network.follows, 2)
     assert.equal(snapshot.trust.verifiedProfile, true)
     assert.equal(snapshot.trust.resolvedViaDhtHead, false)
     assert.ok(typeof snapshot.trust.selectedHeadSeq === 'number')
     assert.match(snapshot.trust.selectedProfileRef || '', /^magnet:\?xt=urn:btih:/)
     assert.ok(snapshot.suggestions.some(item => item.username === 'sol'))
-    assert.ok(snapshot.feed.some(item => item.kind === 'profile'))
-    assert.ok(snapshot.feed.some(item => item.kind === 'upload'))
-    assert.ok(snapshot.feed.some(item => item.kind === 'keep'))
-    assert.ok(snapshot.feed.some(item => item.kind === 'follow'))
-    assert.ok(snapshot.feed.some(item => item.kind === 'post' && item.subjectTitle === 'Afterglass'))
+    assert.ok(snapshot.feed.every(item => item.kind === 'post'))
+    assert.ok(snapshot.feed.some(item => item.kind === 'post' && item.subjectTitle === 'Night Transit'))
+    assert.ok(snapshot.feed.some(item => item.kind === 'post' && item.subjectTitle === 'Harbor Studies'))
 
     await service.searchProfiles(clientId, 'noor')
     snapshot = await service.buildSnapshot(clientId)
     assert.equal(snapshot.discoverQuery, 'noor')
     assert.deepEqual(snapshot.searchResults.map(item => item.username), ['noor'])
+  } finally {
+    await service.destroy()
+    await fs.rm(baseDir, { recursive: true, force: true })
+  }
+})
+
+test('structured upload publishes a canonical package and followers see the package post instead of child upload noise', async () => {
+  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yolk-structured-upload-'))
+  const sampleMediaDir = path.join(repoRoot, 'sample media')
+  const aliceClient = 'structured-alice'
+  const bobClient = 'structured-bob'
+  const service = await AppService.create({ baseDir, sampleMediaDir })
+
+  try {
+    const alice = await service.createAccount(aliceClient, {
+      username: 'alice',
+      displayName: 'Alice Atlas',
+      bio: 'Structured uploader'
+    })
+    await service.publishStructuredUpload(aliceClient, {
+      packageKind: 'show',
+      description: 'Season package for regression coverage.',
+      seriesTitle: 'Signal Bureau',
+      seasonLabel: 'Season 1',
+      rows: [
+        {
+          title: 'Episode 1',
+          fileName: 'episode-1.txt',
+          mediaType: 'text',
+          dataBase64: Buffer.from('Episode one payload', 'utf8').toString('base64')
+        },
+        {
+          title: 'Episode 2',
+          fileName: 'episode-2.txt',
+          mediaType: 'text',
+          dataBase64: Buffer.from('Episode two payload', 'utf8').toString('base64')
+        }
+      ]
+    })
+
+    const aliceSnapshot = await service.buildSnapshot(aliceClient)
+    const season = aliceSnapshot.library.collections.find(item => item.title === 'Season 1')
+    assert.ok(season, 'expected structured package in library')
+    assert.equal(season.packageKind, 'show')
+    assert.deepEqual(season.libraryPath, ['Shows', 'Signal Bureau'])
+    assert.deepEqual(season.children.map(child => child.title), ['Episode 1', 'Episode 2'])
+
+    await service.createAccount(bobClient, {
+      username: 'bob',
+      displayName: 'Bob Vale',
+      bio: 'Follower'
+    })
+    await service.followAccount(bobClient, alice.accountId)
+    const bobSnapshot = await service.buildSnapshot(bobClient)
+    assert.ok(bobSnapshot.feed.some(item => item.kind === 'post' && item.subjectTitle === 'Season 1'))
+    assert.ok(!bobSnapshot.feed.some(item => item.kind === 'upload' && ['Episode 1', 'Episode 2'].includes(item.subjectTitle)))
   } finally {
     await service.destroy()
     await fs.rm(baseDir, { recursive: true, force: true })
@@ -194,17 +248,17 @@ test('unkeeping a saved collection removes its package from the library', async 
     })
 
     const initial = await service.buildSnapshot(clientId)
-    const relay = initial.feed.find(item => item.subjectTitle === 'Crossfade Relay')
+    const relay = initial.feed.find(item => item.subjectTitle === 'Night Transit')
     assert.ok(relay?.collectionRef, 'expected seeded collection in feed')
 
     await service.keepCollection(clientId, relay.collectionRef)
     let snapshot = await service.buildSnapshot(clientId)
-    assert.ok(snapshot.library.collections.some(item => item.title === 'Crossfade Relay'))
-    assert.deepEqual(snapshot.library.keptTitles.slice().sort(), ['Amber Lines', 'Night Transit'].sort())
+    assert.ok(snapshot.library.collections.some(item => item.title === 'Night Transit'))
+    assert.deepEqual(snapshot.library.keptTitles.slice().sort(), ['Night Transit', 'Signal Bloom'].sort())
 
     await service.unkeepCollection(clientId, relay.collectionRef)
     snapshot = await service.buildSnapshot(clientId)
-    assert.ok(!snapshot.library.collections.some(item => item.title === 'Crossfade Relay'))
+    assert.ok(!snapshot.library.collections.some(item => item.title === 'Night Transit'))
     assert.deepEqual(snapshot.library.keptTitles, [])
   } finally {
     await service.destroy()
@@ -283,14 +337,14 @@ test('app service persists session state and saved library collections across re
       bio: 'Collector'
     })
     const initial = await service.buildSnapshot(clientId)
-    const relay = initial.feed.find(item => item.subjectTitle === 'Crossfade Relay')
+    const relay = initial.feed.find(item => item.subjectTitle === 'Night Transit')
     assert.ok(relay?.collectionRef, 'expected seeded collection in feed')
     await service.keepCollection(clientId, relay.collectionRef)
     await service.setSection(clientId, 'library')
 
     const beforeRestart = await service.buildSnapshot(clientId)
     assert.equal(beforeRestart.currentAccount?.username, 'alice')
-    assert.ok(beforeRestart.library.collections.some(item => item.title === 'Crossfade Relay'))
+    assert.ok(beforeRestart.library.collections.some(item => item.title === 'Night Transit'))
 
     await service.destroy()
     service = await AppService.create({ baseDir, sampleMediaDir })
@@ -298,7 +352,7 @@ test('app service persists session state and saved library collections across re
     const afterRestart = await service.buildSnapshot(clientId)
     assert.equal(afterRestart.currentAccount?.username, 'alice')
     assert.equal(afterRestart.activeSection, 'library')
-    assert.ok(afterRestart.library.collections.some(item => item.title === 'Crossfade Relay'))
+    assert.ok(afterRestart.library.collections.some(item => item.title === 'Night Transit'))
   } finally {
     await service.destroy()
     await fs.rm(baseDir, { recursive: true, force: true })

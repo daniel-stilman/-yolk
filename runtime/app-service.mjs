@@ -46,6 +46,81 @@ const SAMPLE_MEDIA_FIXTURES = [
   }
 ]
 
+const DEMO_NETWORK_VERSION = 2
+const PACKAGE_KIND_CONFIG = {
+  album: { collectionType: 'album', rootLabel: 'Music' },
+  audiobook: { collectionType: 'audiobook', rootLabel: 'Audiobooks' },
+  movie: { collectionType: 'movie', rootLabel: 'Movies' },
+  show: { collectionType: 'season', rootLabel: 'Shows' },
+  art: { collectionType: 'gallery', rootLabel: 'Art' },
+  graphic_novel: { collectionType: 'graphic-novel', rootLabel: 'Graphic Novels' }
+}
+
+function normalizeLibraryPath(pathValue, fallback = []) {
+  if (!Array.isArray(pathValue)) return [...fallback]
+  const normalized = pathValue
+    .map(part => String(part || '').trim())
+    .filter(Boolean)
+  return normalized.length ? normalized : [...fallback]
+}
+
+function inferPackageKind(input) {
+  const mediaTypes = Array.isArray(input?.rows)
+    ? input.rows.map(row => String(row?.mediaType || '').trim().toLowerCase()).filter(Boolean)
+    : []
+  if (!mediaTypes.length) return 'art'
+  const unique = [...new Set(mediaTypes)]
+  if (unique.length === 1) {
+    if (unique[0] === 'audio') return 'album'
+    if (unique[0] === 'video') return mediaTypes.length > 1 ? 'show' : 'movie'
+    if (unique[0] === 'text') return 'audiobook'
+    return 'art'
+  }
+  if (mediaTypes.every(type => type === 'video' || type === 'image')) return 'movie'
+  if (mediaTypes.every(type => type === 'audio' || type === 'text')) return 'audiobook'
+  return 'art'
+}
+
+function canonicalPackageFromInput(input) {
+  const requestedKind = String(input.packageKind || '').trim()
+  const packageKind = PACKAGE_KIND_CONFIG[requestedKind] ? requestedKind : inferPackageKind(input)
+  const kindConfig = PACKAGE_KIND_CONFIG[packageKind] || PACKAGE_KIND_CONFIG.art
+  const title = String(input.title || '').trim()
+  const seriesTitle = String(input.seriesTitle || '').trim()
+  const seasonLabel = String(input.seasonLabel || '').trim()
+  const description = String(input.description || '').trim()
+
+  if (packageKind === 'show') {
+    const showTitle = seriesTitle || title || 'Untitled show'
+    return {
+      packageKind,
+      collectionType: kindConfig.collectionType,
+      collectionTitle: seasonLabel || 'Season 1',
+      libraryPath: [kindConfig.rootLabel, showTitle],
+      description
+    }
+  }
+
+  if (packageKind === 'graphic_novel') {
+    const seriesLabel = seriesTitle || title || 'Untitled graphic novel'
+    return {
+      packageKind,
+      collectionType: kindConfig.collectionType,
+      collectionTitle: title || 'Volume 1',
+      libraryPath: [kindConfig.rootLabel, seriesLabel],
+      description
+    }
+  }
+
+  return {
+    packageKind,
+    collectionType: kindConfig.collectionType,
+    collectionTitle: title || 'Untitled package',
+    libraryPath: [kindConfig.rootLabel],
+    description
+  }
+}
+
 export class AppService {
   constructor(options = {}) {
     this.baseDir = options.baseDir || path.join(os.tmpdir(), 'yolk-app-service')
@@ -88,11 +163,38 @@ export class AppService {
 
   async ensureDemoNetwork() {
     const existing = await fs.readFile(this.demoAccountsFile, 'utf8').then(JSON.parse).catch(() => null)
-    if (existing?.sol && existing?.noor) {
-      this.demoAccounts = existing
-      this.knownAccounts.add(existing.sol)
-      this.knownAccounts.add(existing.noor)
-      return
+    if (existing?.version === DEMO_NETWORK_VERSION && existing?.sol && existing?.noor) {
+      let hasCanonicalPackages = true
+      for (const accountId of [existing.sol, existing.noor]) {
+        const resolvedProfile = await this.demoRuntime.resolveProfile(accountId).catch(() => null)
+        const collectionRefs = resolvedProfile?.state?.collectionRefs || []
+        if (!resolvedProfile || !collectionRefs.length) {
+          hasCanonicalPackages = false
+          break
+        }
+        for (const collectionRef of collectionRefs) {
+          const resolvedCollection = await this.demoRuntime.resolveCollection(collectionRef).catch(() => null)
+          if (!resolvedCollection?.collection?.packageKind) {
+            hasCanonicalPackages = false
+            break
+          }
+        }
+        if (!hasCanonicalPackages) break
+      }
+      if (hasCanonicalPackages) {
+        this.demoAccounts = { sol: existing.sol, noor: existing.noor }
+        this.knownAccounts.add(existing.sol)
+        this.knownAccounts.add(existing.noor)
+        return
+      }
+      await this.demoRuntime.destroy()
+      await fs.rm(this.demoDir, { recursive: true, force: true })
+      await fs.rm(this.demoAccountsFile, { force: true })
+      this.demoRuntime = await P2PRuntime.create({
+        name: 'demo',
+        baseDir: this.demoDir,
+        bootstrap: [`127.0.0.1:${this.bootstrap.address.port}`]
+      })
     }
 
     const sol = await this.demoRuntime.createAccount({
@@ -137,10 +239,22 @@ export class AppService {
     await this.demoRuntime.publishCollection(sol.accountId, {
       title: 'Harbor Studies',
       type: 'gallery',
-      description: "Sol's original collection of late-light material.",
+      packageKind: 'art',
+      libraryPath: ['Art'],
+      description: "Sol's still-image release from the harbor run at dusk.",
       isCurated: false,
       children: [
-        { kind: 'media', ref: amber.mediaRef },
+        { kind: 'media', ref: amber.mediaRef }
+      ]
+    })
+    await this.demoRuntime.publishCollection(sol.accountId, {
+      title: 'Open Light',
+      type: 'album',
+      packageKind: 'album',
+      libraryPath: ['Music'],
+      description: "Sol's late-night single packaged for playback.",
+      isCurated: false,
+      children: [
         { kind: 'media', ref: openLight.mediaRef }
       ]
     })
@@ -160,32 +274,23 @@ export class AppService {
       data: bloomFixture.data
     })
     await this.demoRuntime.publishCollection(noor.accountId, {
-      title: 'Afterglass',
-      type: 'series',
-      description: "Noor's original moving-image and still sequence.",
+      title: 'Night Transit',
+      type: 'movie',
+      packageKind: 'movie',
+      libraryPath: ['Movies'],
+      description: "Noor's night-run film package with its companion still.",
       isCurated: false,
       children: [
         { kind: 'media', ref: night.mediaRef },
         { kind: 'media', ref: bloom.mediaRef }
       ]
     })
-    await this.demoRuntime.publishCollection(noor.accountId, {
-      title: 'Crossfade Relay',
-      type: 'curated',
-      description: "A curated post that preserves Sol's original authorship alongside Noor's own release.",
-      isCurated: true,
-      children: [
-        { kind: 'media', ref: amber.mediaRef },
-        { kind: 'media', ref: night.mediaRef }
-      ]
-    })
-    await this.demoRuntime.keepMedia(noor.accountId, amber.mediaRef)
     await this.demoRuntime.publishFollow(noor.accountId, sol.accountId)
 
     this.demoAccounts = { sol: sol.accountId, noor: noor.accountId }
     this.knownAccounts.add(sol.accountId)
     this.knownAccounts.add(noor.accountId)
-    await fs.writeFile(this.demoAccountsFile, JSON.stringify(this.demoAccounts, null, 2))
+    await fs.writeFile(this.demoAccountsFile, JSON.stringify({ version: DEMO_NETWORK_VERSION, ...this.demoAccounts }, null, 2))
   }
 
   sessionFileFor(clientId) {
@@ -417,7 +522,7 @@ export class AppService {
         ...base,
         kind: 'keep',
         subjectTitle: resolvedMedia?.media?.title || activity.subjectTitle || 'Keep',
-        summary: activity.summary || 'Saved to library'
+        summary: activity.summary || 'Downloaded and seeding.'
       }
     }
 
@@ -504,6 +609,8 @@ export class AppService {
       ref: collectionRef,
       title: collection.title,
       type: collection.type,
+      packageKind: collection.packageKind || null,
+      libraryPath: normalizeLibraryPath(collection.libraryPath, []),
       isCurated: collection.isCurated,
       description: collection.description,
       coverMediaRef: firstMediaRef,
@@ -714,7 +821,17 @@ export class AppService {
     }
     const items = []
     for (const actor of actors) {
+      const packagedMediaRefs = new Set()
+      for (const collectionRef of actor.resolved.state.collectionRefs || []) {
+        const resolvedCollection = await actor.reader.resolveCollection(collectionRef).catch(() => null)
+        if (!resolvedCollection?.collection?.packageKind) continue
+        for (const child of resolvedCollection.collection.children || []) {
+          if (child.kind === 'media' && child.ref) packagedMediaRefs.add(child.ref)
+        }
+      }
       for (const activity of [...actor.resolved.state.activities].reverse()) {
+        if (activity.kind !== 'collection') continue
+        if (activity.kind === 'upload' && packagedMediaRefs.has(activity.subjectRef)) continue
         const item = await this.buildFeedItem(runtime, actor.accountId, actor.resolved, activity)
         if (item) items.push(item)
       }
@@ -829,6 +946,7 @@ export class AppService {
     await session.runtime.resolveProfile(accountId)
     session.ui.selectedProfileAccountId = accountId
     session.ui.activeSection = 'profile'
+    session.ui.discoverQuery = ''
     session.ui.flashMessage = ''
     await this.saveSession(clientId, session)
     return true
@@ -837,7 +955,6 @@ export class AppService {
   async searchProfiles(clientId, query) {
     const session = await this.getSession(clientId)
     session.ui.discoverQuery = String(query || '').trim()
-    session.ui.activeSection = 'discover'
     session.ui.flashMessage = ''
     const results = session.ui.discoverQuery ? await this.searchKnownProfiles(session.runtime, session.ui.discoverQuery) : []
     for (const result of results) await this.rememberAccount(result.accountId)
@@ -845,9 +962,17 @@ export class AppService {
     return results
   }
 
+  async clearSearch(clientId) {
+    const session = await this.getSession(clientId)
+    session.ui.discoverQuery = ''
+    await this.saveSession(clientId, session)
+    return true
+  }
+
   async setSection(clientId, section) {
     const session = await this.getSession(clientId)
     session.ui.activeSection = section
+    session.ui.discoverQuery = ''
     await this.saveSession(clientId, session)
   }
 
@@ -865,6 +990,49 @@ export class AppService {
     session.ui.flashMessage = 'Added to draft.'
     await this.saveSession(clientId, session)
     return result
+  }
+
+  async publishStructuredUpload(clientId, input) {
+    const session = await this.getSession(clientId)
+    const rows = Array.isArray(input?.rows) ? input.rows : []
+    if (!rows.length) throw new Error('At least one upload row is required')
+
+    const structured = canonicalPackageFromInput(input)
+    const childRefs = []
+
+    for (const row of rows) {
+      const mediaResult = await session.runtime.publishMedia(session.currentAccountId, {
+        title: String(row.title || '').trim() || String(row.fileName || '').trim() || 'Untitled media',
+        description: String(row.description || '').trim(),
+        mediaType: row.mediaType,
+        fileName: row.fileName,
+        data: Buffer.from(row.dataBase64, 'base64')
+      })
+      childRefs.push(mediaResult.mediaRef)
+    }
+
+    const collectionResult = await session.runtime.publishCollection(session.currentAccountId, {
+      title: structured.collectionTitle,
+      type: structured.collectionType,
+      description: structured.description,
+      isCurated: false,
+      coverMediaRef: childRefs[0] || null,
+      packageKind: structured.packageKind,
+      libraryPath: structured.libraryPath,
+      children: childRefs.map(ref => ({ kind: 'media', ref }))
+    })
+
+    session.ui.collectionDraftChildRefs = []
+    session.ui.selectedProfileAccountId = session.currentAccountId
+    session.ui.activeSection = 'library'
+    session.ui.flashMessage = 'Uploaded and seeding.'
+    await this.saveSession(clientId, session)
+    return {
+      collectionRef: collectionResult.collectionRef,
+      mediaRefs: childRefs,
+      libraryPath: structured.libraryPath,
+      packageKind: structured.packageKind
+    }
   }
 
   async createCollection(clientId, input) {
@@ -886,7 +1054,7 @@ export class AppService {
     const session = await this.getSession(clientId)
     const result = await session.runtime.keepMedia(session.currentAccountId, mediaRef)
     session.ui.savedMediaRefs = [...new Set([mediaRef, ...session.ui.savedMediaRefs])]
-    session.ui.flashMessage = 'Saved.'
+    session.ui.flashMessage = 'Downloaded and seeding.'
     await this.saveSession(clientId, session)
     return result
   }
@@ -922,7 +1090,7 @@ export class AppService {
     }
     session.ui.savedCollectionRefs = [...new Set([collectionRef, ...session.ui.savedCollectionRefs])]
     session.ui.savedCollectionPackages[collectionRef] = packageRefs
-    session.ui.flashMessage = packageRefs.mediaRefs.length || packageRefs.collectionRefs.length ? 'Saved to library.' : 'Nothing to save.'
+    session.ui.flashMessage = packageRefs.mediaRefs.length || packageRefs.collectionRefs.length ? 'Downloaded and seeding.' : 'Nothing to download.'
     await this.saveSession(clientId, session)
     return { keptRefs: packageRefs.mediaRefs, keptCollectionRefs: packageRefs.collectionRefs }
   }

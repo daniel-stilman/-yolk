@@ -53,6 +53,11 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 a {
   color: inherit;
 }
@@ -144,21 +149,26 @@ a {
   flex: 0 0 auto;
 }
 
-.header-search-inline {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
+.header-search-panel {
   position: absolute;
   left: calc(100% + 12px);
   top: -12px;
-  width: clamp(240px, 28vw, 380px);
-  height: 58px;
-  padding: 12px 12px 0;
+  width: clamp(260px, 30vw, 420px);
+  display: grid;
+  gap: 10px;
+  padding: 12px;
   border: 2px solid var(--line);
   border-top: 0;
   background: var(--panel-strong);
   animation: searchDrawerOpen 180ms steps(4) 1;
   z-index: 2;
+}
+
+.header-search-inline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
 }
 
 .header-search-input {
@@ -174,6 +184,21 @@ a {
 
 .header-search-input:focus {
   outline: none;
+}
+
+.header-search-results {
+  gap: 8px;
+}
+
+.header-search-result {
+  padding: 12px;
+}
+
+.header-search-empty {
+  min-height: 44px;
+  display: grid;
+  align-items: center;
+  color: var(--muted);
 }
 
 .nav-button {
@@ -488,11 +513,103 @@ a {
   animation: qbasicSpriteShift 220ms steps(4) infinite;
 }
 
-.post-like-button {
+.download-button {
   display: inline-flex;
   align-items: center;
-  min-width: 88px;
   justify-content: center;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  padding: 0;
+  background: #0018d8;
+  border: 2px solid #ffffff;
+  box-shadow:
+    inset 2px 2px 0 #55ffff,
+    inset -2px -2px 0 #000055;
+}
+
+.download-button:hover {
+  transform: translate(-1px, -1px);
+  border-color: var(--line-strong);
+  background:
+    repeating-linear-gradient(90deg, #0038ff 0 8px, #005dff 8px 16px, #55ffff 16px 24px);
+  animation: qbasicSpriteShift 220ms steps(4) infinite;
+}
+
+.download-button--compact {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+}
+
+.download-button-heart {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+}
+
+.download-button-heart-glyph {
+  font-size: 28px;
+  line-height: 1;
+  color: transparent;
+  -webkit-text-stroke: 2px #ffffff;
+}
+
+.download-button-arrow {
+  position: absolute;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--accent);
+}
+
+.download-button.is-active {
+  background: #5e4300;
+  box-shadow:
+    inset 2px 2px 0 #ffe58a,
+    inset -2px -2px 0 #2c1b00,
+    0 0 14px rgba(255, 215, 109, 0.48);
+}
+
+.download-button.is-active .download-button-heart-glyph {
+  color: #ffd84d;
+  -webkit-text-stroke: 0;
+  text-shadow: 0 0 10px rgba(255, 216, 77, 0.65);
+}
+
+.download-button.is-active .download-button-arrow {
+  color: #fff6cf;
+  animation: seedPulseUp 700ms steps(4) infinite;
+}
+
+.download-button--compact .download-button-heart-glyph {
+  font-size: 22px;
+}
+
+.download-button--compact .download-button-arrow {
+  font-size: 11px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@keyframes seedPulseUp {
+  0% {
+    transform: translateY(3px);
+  }
+  100% {
+    transform: translateY(-3px);
+  }
 }
 
 @keyframes qbasicRainbowShift {
@@ -535,9 +652,166 @@ a {
   background: #0018d8;
 }
 
-.library-toolbar {
+.library-browser,
+.upload-draft-rows {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.library-browser-head {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+}
+
+.library-breadcrumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+}
+
+.library-breadcrumb-separator {
+  color: var(--muted);
+}
+
+.library-path-link,
+.library-path-current {
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: none;
+}
+
+.library-path-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.library-path-link:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.library-path-current {
+  color: var(--text);
+}
+
+.library-browser-copy {
+  min-width: 0;
+}
+
+.library-entry-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(188px, 1fr));
+  gap: 16px;
+  align-content: start;
+}
+
+.library-folder-tile,
+.library-media-tile {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  width: 100%;
+  min-height: 164px;
+  padding: 14px;
+  border: 2px solid var(--line);
+  background: #0014c8;
+  color: var(--text);
+  text-align: left;
+  text-decoration: none;
+}
+
+.library-folder-tile:hover,
+.library-media-tile:hover {
+  transform: translate(-2px, -2px);
+  border-color: var(--line-strong);
+  background:
+    repeating-linear-gradient(90deg, rgba(85, 255, 255, 0.18) 0 8px, rgba(0, 20, 200, 0.18) 8px 16px),
+    #0014c8;
+}
+
+.library-folder-tile-icon {
+  flex: 0 0 auto;
+  position: relative;
+  width: 58px;
+  height: 44px;
+}
+
+.library-folder-icon-tab {
+  position: absolute;
+  left: 6px;
+  top: 0;
+  width: 22px;
+  height: 10px;
+  border: 2px solid #ffffff;
+  border-bottom: 0;
+  background: #56b0ff;
+}
+
+.library-folder-icon-body {
+  position: absolute;
+  inset: 10px 0 0;
+  border: 2px solid #ffffff;
+  background: #0038ff;
+  box-shadow:
+    inset 2px 2px 0 #7fd1ff,
+    inset -2px -2px 0 #001466;
+}
+
+.library-folder-tile-copy {
+  display: grid;
+  gap: 6px;
+}
+
+.library-media-preview {
+  min-height: 118px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  border: 2px solid #ffffff;
+  background: #000066;
+  color: var(--text);
+}
+
+.library-media-preview img,
+.library-media-preview video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.library-media-preview--label span {
+  font-size: 18px;
+  letter-spacing: 0.12em;
+}
+
+.library-media-copy {
+  display: grid;
+  gap: 6px;
+}
+
+.library-folder-tile-copy h4 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.library-folder-tile-copy p,
+.library-media-copy p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.library-media-copy h4 {
+  margin: 0;
+  font-size: 17px;
 }
 
 .overlay-backdrop {
@@ -552,11 +826,13 @@ a {
 
 .overlay-panel {
   width: min(560px, 100%);
+  max-height: calc(100vh - 48px);
   display: grid;
   gap: 16px;
   padding: 18px;
   border: 2px solid #ffffff;
   background: #0000aa;
+  overflow: auto;
   box-shadow:
     inset 2px 2px 0 #55ffff,
     inset -2px -2px 0 #000055;
@@ -576,6 +852,61 @@ a {
 .overlay-rows {
   display: grid;
   gap: 14px;
+}
+
+.upload-dropzone {
+  display: grid;
+  place-items: center;
+  min-height: 96px;
+  padding: 18px;
+  border: 2px dashed #55ffff;
+  background: #0016ce;
+  color: var(--muted);
+  text-align: center;
+  cursor: pointer;
+}
+
+.upload-dropzone input {
+  display: none;
+}
+
+.upload-draft-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 2px solid var(--line);
+  background: #0011b8;
+}
+
+.upload-draft-handle {
+  min-width: 24px;
+  color: var(--accent);
+  cursor: grab;
+  user-select: none;
+}
+
+.upload-draft-title {
+  min-height: 36px;
+  padding: 0 10px;
+  border: 2px solid #ffffff;
+  background: #0012c4;
+  color: var(--text);
+  font-family: "Lucida Console", "Courier New", monospace;
+}
+
+.upload-draft-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.upload-draft-remove {
+  min-height: 34px;
 }
 
 .modal-strip {
@@ -918,12 +1249,14 @@ a {
     flex-wrap: wrap;
   }
 
-  .header-search-inline {
+  .header-search-panel {
     position: static;
     width: 100%;
-    height: 54px;
-    padding: 0 12px 10px;
     border-top: 2px solid var(--line);
+  }
+
+  .header-search-inline {
+    width: 100%;
   }
 }
 
@@ -941,6 +1274,15 @@ a {
   .post-child-grid,
   .saved-grid {
     grid-template-columns: 1fr;
+  }
+
+  .upload-draft-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .upload-draft-meta,
+  .upload-draft-remove {
+    grid-column: 1 / -1;
   }
 
   .simple-item,

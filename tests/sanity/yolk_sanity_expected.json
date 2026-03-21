@@ -27,7 +27,7 @@
       "feedIncludes": [
         {
           "actorUsername": "noor",
-          "subjectTitle": "Afterglass"
+          "subjectTitle": "Night Transit"
         },
         {
           "actorUsername": "sol",
@@ -36,71 +36,40 @@
       ]
     },
     {
-      "id": "keep_media_flows_into_library",
+      "id": "download_media_flows_into_library",
       "activeSection": "Library",
-      "libraryTitles": ["Amber Lines"],
-      "libraryPosts": [
-        {
-          "title": "Amber Lines",
-          "childTitles": ["Amber Lines"],
-          "childCreators": "sol"
-        }
-      ]
+      "libraryTitlesExact": ["Amber Lines"],
+      "libraryTitles": ["Amber Lines"]
     },
     {
-      "id": "like_feed_post_saves_library",
+      "id": "download_feed_post_flows_into_library",
       "activeSection": "Library",
-      "libraryTitles": ["Crossfade Relay"],
-      "libraryLikedTitles": ["Crossfade Relay"],
-      "libraryPosts": [
-        {
-          "title": "Crossfade Relay",
-          "childTitles": ["Amber Lines", "Night Transit"],
-          "childCreators": "sol, noor"
-        }
-      ]
+      "libraryTitlesExact": ["Night Transit", "Signal Bloom"],
+      "libraryDownloadedTitles": ["Night Transit"]
     },
     {
-      "id": "unlike_saved_collection_removes_library_package",
+      "id": "remove_downloaded_collection_removes_library_package",
       "activeSection": "Library",
       "libraryTitlesExact": [],
-      "libraryLikedTitles": [],
+      "libraryDownloadedTitles": [],
       "flashTextIncludes": ["Removed from library."]
     },
     {
       "id": "open_feed_post_opens_profile",
       "activeSection": "Discover",
-      "overlayTitle": "Afterglass"
+      "overlayTitle": "Night Transit"
     },
     {
-      "id": "upload_media_and_publish_original_collection",
-      "activeSection": "Profile",
-      "profile": {
-        "username": "alice",
-        "posts": [
-          {
-            "title": "Protocol Packet",
-            "mode": "original",
-            "childTitles": ["Protocol Notes"],
-            "childCreators": "alice"
-          }
-        ]
-      }
+      "id": "structured_upload_places_package_in_library",
+      "activeSection": "Library",
+      "flashTextIncludes": ["Uploaded and seeding."],
+      "libraryFolders": ["Shows"],
+      "libraryTitlesExact": []
     },
     {
-      "id": "curated_collection_preserves_original_authorship",
-      "activeSection": "Profile",
-      "profile": {
-        "username": "alice",
-        "posts": [
-          {
-            "title": "Signal Stack",
-            "mode": "curated",
-            "childTitles": ["Amber Lines", "Night Transit"],
-            "childCreators": "sol, noor"
-          }
-        ]
-      }
+      "id": "library_clicks_through_canonical_folders",
+      "activeSection": "Library",
+      "libraryTitlesExact": ["Episode 1", "Episode 2"]
     },
     {
       "id": "full_program_journey",
@@ -111,7 +80,7 @@
       "feedIncludes": [
         {
           "actorUsername": "noor",
-          "subjectTitle": "Afterglass"
+          "subjectTitle": "Night Transit"
         },
         {
           "actorUsername": "sol",

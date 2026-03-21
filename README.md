@@ -15,7 +15,7 @@ The app follows these non-negotiable rules:
 5. Media objects are immutable and signed by their creator account.
 6. Collections are signed by the collection creator and can reference media from many creators.
 7. Curation never overwrites original authorship.
-8. A Keep is a signed save action with seeding intent.
+8. A Keep is the signed download action with seeding intent.
 
 ## First Build Scope
 
@@ -29,7 +29,7 @@ This application currently demonstrates:
 - original and curated collections
 - follow records
 - keep records
-- a feed composed from followed accounts' activity
+- a Discover queue composed from followed accounts' media posts
 - profile browsing with verified username/display-name rendering
 - a seeded demo network so discovery works immediately
 
@@ -38,10 +38,13 @@ This application currently demonstrates:
 The default product surface should be shaped around one job first: getting people to media with as little friction as possible.
 
 - Library access comes first.
-- Discovery comes second, as a way to bring more media and collections into the library.
+- Discovery comes second, as a way to bring more media packages into the library.
 - Default user-facing views should not expose account ids, raw refs, trust/debug fields, transport counters, or other implementation-detail scaffolding.
+- Placeholder stat rows, account/network totals, and similar diagnostic furniture should not appear in the normal product surface.
 - If verification or diagnostics are needed, they belong behind an explicit dedicated affordance rather than in routine browsing and discovery UI.
-- Collections should be presented consistently across discovery, library, and profile views so saved media packages do not change shape from screen to screen.
+- Media packages should use a consistent canonical structure so the same release is understandable in discovery, profile, and library flows.
+- Upload and library flows should favor canonical, consumer-friendly media paths so downloaded packages land where people expect to find them later.
+- Library navigation should act like a familiar explorer: folders drill down in place, and leaf media opens directly rather than detouring through folder popups.
 
 The networking and peer-to-peer transport are still simplified in parts of the app. The live browser shell now runs through the runtime-backed app service, but it still relies on:
 
@@ -119,12 +122,12 @@ Follows and Keeps are signed records. The feed is built from recent activity by 
 
 Keep means:
 
-- save in the local library
+- download into the local library
 - mark as intended to seed
 
-### 5. Collections
+### 5. Packages
 
-Collections are the primary publishing surface. They can reference:
+Packages are the primary publishing surface. They can reference:
 
 - media items
 - other collections
@@ -140,7 +143,6 @@ The application includes:
 - `Library`
 - `Profile`
 - `Upload / Create`
-- `Collection Editor`
 
 The UI is deliberately desktop-first and media-forward. Internally everything is keyed by account id, even when the normal surface stays focused on usernames, display names, and media packages instead of system identifiers.
 
@@ -163,7 +165,7 @@ The sanity fixture pair is authoritative:
 - `tests/sanity/yolk_sanity_input.json`
 - `tests/sanity/yolk_sanity_expected.json`
 
-The end-to-end harness starts `server.mjs`, opens the real app bundle in headless Edge through `playwright-core`, drives the actual DOM, and compares the rendered output against the curated expected snapshot. This is the baseline "full run of the program" check for onboarding, discovery, follows, keeps, uploads, collections, and feed rendering.
+The end-to-end harness starts `server.mjs`, opens the real app bundle in headless Edge through `playwright-core`, drives the actual DOM, and compares the rendered output against the curated expected snapshot. This is the baseline "full run of the program" check for onboarding, discovery, follows, downloads, structured uploads, collections, and feed rendering.
 
 `tests/network.test.mjs` is the new non-UI proof layer for the actual transport. It launches multiple local peers against a bootstrap DHT node and verifies:
 
@@ -187,22 +189,22 @@ Keep this synchronized with `tests/sanity/yolk_sanity_input.json` and `tests/san
   Opens a collection from Discover and verifies that the collection overlay resolves from the live followed-network feed.
 - `discover_search_opens_profile`
   Expands the header Search drawer inline from the nav, searches for a user, then opens the matching profile through the runtime-backed account lookup.
-- `followed_activity_visible_in_feed`
-  The followed network resolves into Discover activity and surfaces posts from both directly followed and transitively discovered accounts.
-- `keep_media_flows_into_library`
-  A Keep action creates a signed keep record and places the media in the local kept library with seeding intent.
-- `like_feed_post_saves_library`
-  Saving a collection from Discover fills the same Like control and pulls the whole package into the local library surface without changing its collection-style presentation.
-- `unlike_saved_collection_removes_library_package`
-  Removing a saved collection from the library confirms the action, un-fills the Like control, and removes the saved package from the library surface.
+- `followed_posts_visible_in_feed`
+  The followed network resolves into a post-only Discover queue and surfaces media packages from both directly followed and transitively discovered accounts.
+- `download_media_flows_into_library`
+  Downloading a media item creates the signed keep record and places the media in the local library under its canonical media folder.
+- `download_feed_post_flows_into_library`
+  Downloading a media package from Discover fills the same heart-download control and pulls the whole package into the library under the expected folder path.
+- `remove_downloaded_collection_removes_library_package`
+  Removing a downloaded collection from the library confirms the action, un-fills the control, and removes the package from the library folder where it appeared.
 - `open_feed_post_opens_profile`
-  Opening a Discover post resolves the collection overlay through the live feed payload.
-- `upload_media_and_publish_original_collection`
-  Uploads a new immutable media object through the actual form flow, then publishes an original collection from the collection editor shelf.
-- `curated_collection_preserves_original_authorship`
-  A curated collection can reference media by multiple creators while the collection creator remains separate from each original media creator.
+  Opening a Discover post resolves the package overlay through the live feed payload.
+- `structured_upload_places_package_in_library`
+  The upload flow builds a typed media package through the drag/drop composer, preserves the edited row order and titles, and lands back on a folder-first library root.
+- `library_clicks_through_canonical_folders`
+  The library opens as a click-through folder browser, and drilling into canonical folders reaches the actual media at the leaf level rather than a popup package card.
 - `full_program_journey`
-  Runs the main desktop journey end-to-end: create account, discover, follow, resolve profile, keep, upload, curate, and confirm feed/library/profile outputs from the live DOM.
+  Runs the main desktop journey end-to-end: create account, discover, follow, resolve profile, download, upload, and confirm feed/library/profile outputs from the live DOM.
 
 ## Notes For The Next Build
 

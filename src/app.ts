@@ -55,6 +55,8 @@ export type CollectionRecord = {
   creatorAccountId: string;
   title: string;
   type: string;
+  packageKind?: string | null;
+  libraryPath?: string[];
   description: string;
   coverRef: string | null;
   children: Array<{ kind: "media" | "collection"; id: string }>;
@@ -83,6 +85,8 @@ type NetworkStore = {
   activities: Record<string, ActivityRecord>;
   usernameIndex: Record<string, string[]>;
 };
+type PackageKind = "album" | "audiobook" | "movie" | "show" | "art" | "graphic_novel";
+type UploadDraftRow = { id: string; title: string; fileName: string; mediaType: string; sizeLabel: string };
 type LocalStore = {
   currentAccountId: string | null;
   publicJwk: JsonWebKey | null;
@@ -92,9 +96,16 @@ type LocalStore = {
   searchOpen: boolean;
   flashMessage: string;
   collectionDraftChildIds: string[];
+  libraryBrowsePath: string[];
   libraryLayout: Record<string, { x: number; y: number }>;
   overlayMode: "media" | "folder" | null;
   collectionOverlayRef: string | null;
+  uploadDraftKind: PackageKind;
+  uploadDraftTitle: string;
+  uploadDraftDescription: string;
+  uploadDraftSeriesTitle: string;
+  uploadDraftSeasonLabel: string;
+  uploadDraftRows: UploadDraftRow[];
 };
 
 type SearchResult = { accountId: string; username: string; displayName: string; verified: boolean };
@@ -132,6 +143,8 @@ type ProfileSummary = {
     ref?: string;
     title: string;
     type: string;
+    packageKind?: string | null;
+    libraryPath?: string[];
     isCurated: boolean;
     description: string;
     coverMediaRef?: string | null;
@@ -151,6 +164,7 @@ type ProfileSummary = {
       contentRef: string;
       thumbnailRef: string | null;
       assetUrl?: string | null;
+      downloaded?: boolean;
     }>;
     updatedAt?: string;
   }>;
@@ -183,6 +197,48 @@ const NETWORK_STORAGE_KEY = "yolk.network.v1";
 const LOCAL_STORAGE_KEY = "yolk.local.v1";
 const LIBRARY_LAYOUT_STORAGE_KEY = "yolk.library-layout.v1";
 
+const PACKAGE_KIND_OPTIONS: Array<{ value: PackageKind; label: string }> = [
+  { value: "album", label: "Music" },
+  { value: "audiobook", label: "Audiobook" },
+  { value: "movie", label: "Movie" },
+  { value: "show", label: "Show" },
+  { value: "art", label: "Art" },
+  { value: "graphic_novel", label: "Graphic Novel" }
+];
+const LOOSE_MEDIA_LIBRARY_LABELS: Record<string, string> = {
+  audio: "Music",
+  video: "Movies",
+  image: "Art",
+  text: "Reading"
+};
+const LEGACY_LIBRARY_ROOT_LABELS: Record<string, string> = {
+  Audio: "Music",
+  Video: "Movies",
+  Images: "Art",
+  Texts: "Reading"
+};
+const PACKAGE_KIND_ROOT_LABELS: Record<string, string> = {
+  album: "Music",
+  audiobook: "Audiobooks",
+  movie: "Movies",
+  show: "Shows",
+  art: "Art",
+  graphic_novel: "Graphic Novels"
+};
+const COLLECTION_TYPE_ROOT_LABELS: Record<string, string> = {
+  gallery: "Art",
+  album: "Music",
+  playlist: "Music",
+  audiobook: "Audiobooks",
+  book: "Reading",
+  movie: "Movies",
+  series: "Shows",
+  season: "Shows",
+  show: "Shows",
+  "graphic-novel": "Graphic Novels",
+  graphic_novel: "Graphic Novels"
+};
+
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 const uniq = (values: string[]) => Array.from(new Set(values));
 const nowIso = () => new Date().toISOString();
@@ -190,6 +246,49 @@ const shortId = (value: string) => (!value ? "" : value.length <= 18 ? value : `
 const sanitizeHandle = (value: string) => String(value || "").trim().toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0, 24);
 const escapeHtml = (value: string) => String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 const sortDesc = <T extends { createdAt?: string; updatedAt?: string; id?: string }>(a: T, b: T) => (a.createdAt || a.updatedAt || "") > (b.createdAt || b.updatedAt || "") ? -1 : (a.createdAt || a.updatedAt || "") < (b.createdAt || b.updatedAt || "") ? 1 : (a.id || "").localeCompare(b.id || "");
+const emptyUploadDraft = () => ({ uploadDraftKind: "album" as PackageKind, uploadDraftTitle: "", uploadDraftDescription: "", uploadDraftSeriesTitle: "", uploadDraftSeasonLabel: "", uploadDraftRows: [] as UploadDraftRow[] });
+const fileBaseTitle = (fileName: string) => String(fileName || "").replace(/\.[^.]+$/, "");
+const fileSizeLabel = (bytes: number) => bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+
+function inferMediaTypeFromFile(file: File) {
+  const fileType = String(file.type || "").toLowerCase();
+  const fileName = String(file.name || "").toLowerCase();
+  if (fileType.startsWith("image/") || /\.(png|jpe?g|gif|webp|svg)$/.test(fileName)) return "image";
+  if (fileType.startsWith("audio/") || /\.(mp3|wav|ogg|m4a)$/.test(fileName)) return "audio";
+  if (fileType.startsWith("video/") || /\.(mp4|webm|mov|mkv)$/.test(fileName)) return "video";
+  if (fileType.startsWith("text/") || /\.(txt|md|json)$/.test(fileName)) return "text";
+  return null;
+}
+
+function inferCollectionLibraryRoot(item: ProfileSummary["collections"][number]) {
+  if (item.packageKind && PACKAGE_KIND_ROOT_LABELS[item.packageKind]) return PACKAGE_KIND_ROOT_LABELS[item.packageKind];
+  if (COLLECTION_TYPE_ROOT_LABELS[item.type]) return COLLECTION_TYPE_ROOT_LABELS[item.type];
+  const mediaChildren = item.children.filter(child => child.kind === "media");
+  const mediaTypes = mediaChildren.map(child => child.mediaType);
+  if (!mediaTypes.length) return "Art";
+  const uniqueTypes = [...new Set(mediaTypes)];
+  if (uniqueTypes.length === 1) {
+    if (uniqueTypes[0] === "audio") return "Music";
+    if (uniqueTypes[0] === "video") return mediaChildren.length > 1 ? "Shows" : "Movies";
+    if (uniqueTypes[0] === "image") return "Art";
+    if (uniqueTypes[0] === "text") return "Reading";
+  }
+  if (mediaTypes.every(type => type === "image" || type === "video")) return item.type === "series" ? "Shows" : "Art";
+  if (mediaTypes.every(type => type === "audio" || type === "text")) return uniqueTypes.includes("audio") ? (item.type === "series" ? "Audiobooks" : "Music") : "Reading";
+  return "Art";
+}
+
+function libraryPathForCollection(item: ProfileSummary["collections"][number]) {
+  if (Array.isArray(item.libraryPath) && item.libraryPath.length) {
+    const normalized = item.libraryPath.map(part => String(part || "").trim()).filter(Boolean);
+    if (!normalized.length) return [inferCollectionLibraryRoot(item)];
+    if (LEGACY_LIBRARY_ROOT_LABELS[normalized[0]]) return [LEGACY_LIBRARY_ROOT_LABELS[normalized[0]], ...normalized.slice(1)];
+    if (normalized[0] !== "Collections") return normalized;
+    return [inferCollectionLibraryRoot(item), ...normalized.slice(1)];
+  }
+  if (item.sourceKind === "media") return [LOOSE_MEDIA_LIBRARY_LABELS[item.type] || "Media"];
+  return [inferCollectionLibraryRoot(item)];
+}
 
 function stableValue(value: any): any {
   if (Array.isArray(value)) return value.map(stableValue);
@@ -249,7 +348,7 @@ async function createAccountKeys(): Promise<AccountKeys> {
 }
 
 const emptyNetwork = (): NetworkStore => ({ version: 1, meta: { demoReady: false, demoAccounts: {} }, accounts: {}, heads: {}, profiles: {}, blobs: {}, media: {}, collections: {}, keeps: {}, follows: {}, activities: {}, usernameIndex: {} });
-const emptyLocal = (): LocalStore => ({ currentAccountId: null, publicJwk: null, privateJwk: null, activeSection: "discover", selectedProfileAccountId: null, searchOpen: false, flashMessage: "", collectionDraftChildIds: [], libraryLayout: {}, overlayMode: null, collectionOverlayRef: null });
+const emptyLocal = (): LocalStore => ({ currentAccountId: null, publicJwk: null, privateJwk: null, activeSection: "discover", selectedProfileAccountId: null, searchOpen: false, flashMessage: "", collectionDraftChildIds: [], libraryBrowsePath: [], libraryLayout: {}, overlayMode: null, collectionOverlayRef: null, ...emptyUploadDraft() });
 const readJson = <T>(storage: StorageLike, key: string, fallback: T): T => {
   const raw = storage.getItem(key);
   if (!raw) return clone(fallback);
@@ -316,10 +415,10 @@ async function createMedia(network: NetworkStore, keys: AccountKeys, input: { ti
   return media;
 }
 
-async function createCollection(network: NetworkStore, keys: AccountKeys, input: { title: string; type: string; description: string; isCurated: boolean; childIds: string[]; coverId?: string | null }, now: string) {
+async function createCollection(network: NetworkStore, keys: AccountKeys, input: { title: string; type: string; description: string; isCurated: boolean; childIds: string[]; coverId?: string | null; packageKind?: string | null; libraryPath?: string[] }, now: string) {
   const id = `col_${(await sha256Hex(`${keys.accountId}:${input.title}:${now}`)).slice(0, 24)}`;
   const coverRef = input.coverId ? (network.media[input.coverId]?.thumbnailRef || network.media[input.coverId]?.contentRef || null) : (input.childIds.map(childId => network.media[childId]?.thumbnailRef || null).find(Boolean) || null);
-  const record: CollectionRecord = { id, creatorAccountId: keys.accountId, title: String(input.title || "").trim() || "Untitled collection", type: String(input.type || "").trim() || "folder", description: String(input.description || "").trim(), coverRef, children: input.childIds.map(childId => ({ kind: network.collections[childId] ? "collection" : "media", id: childId })), isCurated: Boolean(input.isCurated), updatedAt: now, signature: "" };
+  const record: CollectionRecord = { id, creatorAccountId: keys.accountId, title: String(input.title || "").trim() || "Untitled collection", type: String(input.type || "").trim() || "folder", packageKind: input.packageKind || null, libraryPath: Array.isArray(input.libraryPath) ? input.libraryPath : [], description: String(input.description || "").trim(), coverRef, children: input.childIds.map(childId => ({ kind: network.collections[childId] ? "collection" : "media", id: childId })), isCurated: Boolean(input.isCurated), updatedAt: now, signature: "" };
   record.signature = await signPayload(keys.privateJwk, stripSignature(record));
   network.collections[id] = record;
   await addActivity(network, keys, "collection", id, `Published collection: ${record.title}`, now);
@@ -332,7 +431,7 @@ async function createKeep(network: NetworkStore, keys: AccountKeys, mediaId: str
   const keep: KeepRecord = { id, accountId: keys.accountId, mediaId, createdAt: now, signature: "" };
   keep.signature = await signPayload(keys.privateJwk, stripSignature(keep));
   network.keeps[id] = keep;
-  await addActivity(network, keys, "keep", id, `Keep + seed: ${network.media[mediaId]?.title || mediaId}`, now);
+  await addActivity(network, keys, "keep", id, `Downloaded and seeding: ${network.media[mediaId]?.title || mediaId}`, now);
   return keep;
 }
 
@@ -384,7 +483,26 @@ async function buildFeed(network: NetworkStore, viewerAccountId: string | null):
   if (!viewerAccountId) return [];
   const followed = new Set(Object.values(network.follows).filter(item => item.followerAccountId === viewerAccountId).map(item => item.followedAccountId));
   const actors = new Set([viewerAccountId, ...followed]);
-  return Promise.all(Object.values(network.activities).filter(item => actors.has(item.actorAccountId) && item.kind !== "upload").sort(sortDesc).map(async item => ({ id: item.id, kind: item.kind, actorAccountId: item.actorAccountId, actorUsername: await usernameFor(network, item.actorAccountId), subjectTitle: await subjectTitle(network, item), createdAt: item.createdAt, summary: item.summary })));
+  const profiles = new Map<string, ProfileSummary | null>(await Promise.all([...actors].map(async accountId => [accountId, await buildProfileSummary(network, accountId)] as [string, ProfileSummary | null])));
+  const items = await Promise.all(Object.values(network.activities)
+    .filter(item => actors.has(item.actorAccountId) && item.kind === "collection")
+    .sort(sortDesc)
+    .map(async item => {
+      const profile = profiles.get(item.actorAccountId) || null;
+      const post = profile?.collections.find(collection => collection.ref === item.subjectId) || undefined;
+      return {
+        id: item.id,
+        kind: "post" as const,
+        actorAccountId: item.actorAccountId,
+        actorUsername: await usernameFor(network, item.actorAccountId),
+        subjectTitle: post?.title || await subjectTitle(network, item),
+        createdAt: item.createdAt,
+        summary: item.summary,
+        collectionRef: item.subjectId,
+        post
+      };
+    }));
+  return items.filter(item => item.post);
 }
 
 async function buildLibrary(network: NetworkStore, accountId: string | null): Promise<AppSnapshot["library"]> {
@@ -476,6 +594,8 @@ async function buildProfileSummary(network: NetworkStore, accountId: string | nu
       ref: item.id,
       title: item.title,
       type: item.type,
+      packageKind: item.packageKind || null,
+      libraryPath: Array.isArray(item.libraryPath) ? item.libraryPath : [],
       isCurated: item.isCurated,
       description: item.description,
       coverMediaRef: item.coverRef,
@@ -509,11 +629,12 @@ async function ensureDemoNetwork(network: NetworkStore, now: () => string) {
   await publishProfile(network, noor, { username: "noor", displayName: "Noor Vale", bio: "Curator of late-night signal trails and shared scene notes.", avatarRef: noorAvatar.ref, bannerRef: noorAvatar.ref, pinnedCollectionIds: [] }, now());
   await addActivity(network, noor, "profile", network.heads[noor.accountId].profileRef, "Published initial profile", now());
   const amber = await createMedia(network, sol, { title: "Amber Lines", description: "An original image set from a ferry crossing at dusk.", mediaType: "image", fileName: "amber-lines.svg", dataUrl: demoSvg("Amber Lines", "#efb134"), textPreview: null }, now());
-  const notes = await createMedia(network, sol, { title: "Field Notes Vol. 1", description: "A text dispatch about signal capture and drift.", mediaType: "text", fileName: "field-notes.txt", dataUrl: null, textPreview: "Waypoint sketches, ferry horns, and the first rough map of the harbor loop." }, now());
-  await createCollection(network, sol, { title: "Harbor Studies", type: "gallery", description: "Sol's original collection of visual and written field work.", isCurated: false, childIds: [amber.id, notes.id] }, now());
-  const night = await createMedia(network, noor, { title: "Night Transit", description: "Audio drift sketches sequenced for late playback.", mediaType: "audio", fileName: "night-transit.mp3", dataUrl: null, textPreview: "Audio placeholder for playback and metadata flows.", thumbnailRef: demoSvg("Night Transit", "#d98b2f") }, now());
-  await createCollection(network, noor, { title: "Crossfade Relay", type: "curated", description: "A curated collection that preserves Sol's original authorship alongside Noor's own release.", isCurated: true, childIds: [amber.id, night.id] }, now());
-  await createKeep(network, noor, amber.id, now());
+  const openLight = await createMedia(network, sol, { title: "Open Light", description: "A late-night single published for playback.", mediaType: "audio", fileName: "open-light.mp3", dataUrl: null, textPreview: "Audio placeholder for playback and metadata flows.", thumbnailRef: demoSvg("Open Light", "#efb134") }, now());
+  await createCollection(network, sol, { title: "Harbor Studies", type: "gallery", packageKind: "art", libraryPath: ["Art"], description: "Sol's still-image release from the harbor run at dusk.", isCurated: false, childIds: [amber.id] }, now());
+  await createCollection(network, sol, { title: "Open Light", type: "album", packageKind: "album", libraryPath: ["Music"], description: "Sol's late-night single packaged for playback.", isCurated: false, childIds: [openLight.id] }, now());
+  const night = await createMedia(network, noor, { title: "Night Transit", description: "A moving-image release sequenced for late playback.", mediaType: "video", fileName: "night-transit.mp4", dataUrl: null, textPreview: null, thumbnailRef: demoSvg("Night Transit", "#d98b2f") }, now());
+  const bloom = await createMedia(network, noor, { title: "Signal Bloom", description: "Companion still from the Night Transit package.", mediaType: "image", fileName: "signal-bloom.svg", dataUrl: demoSvg("Signal Bloom", "#d98b2f"), textPreview: null }, now());
+  await createCollection(network, noor, { title: "Night Transit", type: "movie", packageKind: "movie", libraryPath: ["Movies"], description: "Noor's night-run film package with its companion still.", isCurated: false, childIds: [night.id, bloom.id] }, now());
   await createFollow(network, noor, sol.accountId, now());
   network.meta.demoReady = true;
 }
@@ -583,7 +704,7 @@ export function createAppController(storage: StorageLike, options?: { now?: () =
     },
     async keepMedia(mediaId: string) {
       await createKeep(network, await currentKeys(), mediaId, now());
-      setFlash("Saved.");
+      setFlash("Downloaded and seeding.");
       save();
     },
     async followAccount(accountId: string) {
@@ -615,11 +736,13 @@ export function createAppController(storage: StorageLike, options?: { now?: () =
       save();
       return searchProfiles(network, query);
     },
-    setSection(section: SectionName) { local.activeSection = section; save(); },
+    setSection(section: SectionName) { local.activeSection = section; if (section === "library") local.libraryBrowsePath = []; save(); },
     openOverlay(mode: "media" | "folder") { local.overlayMode = mode; local.collectionOverlayRef = null; local.activeSection = "library"; save(); },
     closeOverlay() { local.overlayMode = null; local.collectionOverlayRef = null; save(); },
     openCollection(ref: string) { local.collectionOverlayRef = ref; local.overlayMode = null; save(); },
     closeCollection() { local.collectionOverlayRef = null; save(); },
+    openLibraryPath(pathKey: string) { local.libraryBrowsePath = String(pathKey || "").split(">").map(part => part.trim()).filter(Boolean); save(); },
+    openLibraryRoot() { local.libraryBrowsePath = []; save(); },
     dismissFlash() { local.flashMessage = ""; save(); },
     addDraftChild(mediaId: string) { local.collectionDraftChildIds = uniq([...local.collectionDraftChildIds, mediaId]); setFlash("Media added to the collection draft."); save(); },
     removeDraftChild(mediaId: string) { local.collectionDraftChildIds = local.collectionDraftChildIds.filter(id => id !== mediaId); save(); },
@@ -728,13 +851,35 @@ function renderDiscoverProfileCard(item: SearchResult, currentAccountId: string 
   </article>`;
 }
 
+function renderHeaderSearchResultCard(item: SearchResult, currentAccountId: string | null) {
+  const canFollow = Boolean(currentAccountId && item.accountId !== currentAccountId);
+  return `<article class="header-search-result simple-item">
+    <div class="simple-item-copy">
+      <h4>${escapeHtml(item.displayName)}</h4>
+      <p>@${escapeHtml(item.username)}</p>
+    </div>
+    <div class="button-row">
+      <button class="button-secondary" type="button" data-open-profile="${escapeHtml(item.accountId)}">Open</button>
+      ${canFollow ? `<button class="button-primary" type="button" data-follow-account="${escapeHtml(item.accountId)}">Follow</button>` : ""}
+    </div>
+  </article>`;
+}
+
 function renderCollectionPreviewItem(
   child: ProfileSummary["collections"][number]["children"][number],
   network: NetworkStore,
   actions: { canKeep: boolean }
 ) {
   const keepToken = (child as any).ref || child.id;
-  const keepButton = actions.canKeep && child.kind === "media" ? `<button class="chip-button" data-keep-media="${escapeHtml(keepToken)}">Save</button>` : "";
+  const keepButton = actions.canKeep && child.kind === "media"
+    ? renderDownloadButton({
+        active: Boolean(child.downloaded),
+        action: "keep-media",
+        value: keepToken,
+        compact: true,
+        label: child.downloaded ? "Downloaded and seeding" : "Download"
+      })
+    : "";
   const preview = child.kind === "media"
     ? previewHtml({ mediaType: child.mediaType, contentRef: child.contentRef, thumbnailRef: child.thumbnailRef, assetUrl: child.assetUrl || null } as any, network)
     : `<div class="media-preview media-preview--collection"><span>${escapeHtml(child.title.slice(0, 1) || "C")}</span></div>`;
@@ -760,10 +905,14 @@ function renderCollectionType(item: ProfileSummary["collections"][number]) {
   return item.type === "curated" && item.isCurated ? "" : `<span class="pill">${escapeHtml(item.type)}</span>`;
 }
 
-function renderCollectionLikeButton(item: ProfileSummary["collections"][number], interactive: boolean) {
+function renderDownloadButton(input: { active: boolean; action: "keep-media" | "keep-collection" | "unkeep-collection"; value: string; compact?: boolean; label: string }) {
+  return `<button class="download-button ${input.active ? "is-active" : ""} ${input.compact ? "download-button--compact" : ""}" type="button" aria-pressed="${input.active ? "true" : "false"}" aria-label="${escapeHtml(input.label)}" data-${input.action}="${escapeHtml(input.value)}"><span class="download-button-heart" aria-hidden="true"><span class="download-button-heart-glyph">♥</span><span class="download-button-arrow">${input.active ? "↑" : "↓"}</span></span><span class="visually-hidden">${escapeHtml(input.label)}</span></button>`;
+}
+
+function renderCollectionDownloadButton(item: ProfileSummary["collections"][number], interactive: boolean) {
   if (!interactive || !item.ref || item.sourceKind === "media" || item.owned) return "";
-  if (item.liked) return `<button class="button-primary post-like-button" type="button" aria-pressed="true" data-unkeep-collection="${escapeHtml(item.ref)}">Like</button>`;
-  return `<button class="button-secondary post-like-button" type="button" aria-pressed="false" data-keep-collection="${escapeHtml(item.ref)}">Like</button>`;
+  if (item.liked) return renderDownloadButton({ active: true, action: "unkeep-collection", value: item.ref, label: "Downloaded and seeding" });
+  return renderDownloadButton({ active: false, action: "keep-collection", value: item.ref, label: "Download" });
 }
 
 function renderCollectionCard(
@@ -771,7 +920,7 @@ function renderCollectionCard(
   network: NetworkStore,
   options: { canKeepChildren: boolean; canKeepCollection?: boolean; clickable?: boolean }
 ) {
-  const collectionLikeButton = renderCollectionLikeButton(item, Boolean(options.canKeepCollection));
+  const collectionDownloadButton = renderCollectionDownloadButton(item, Boolean(options.canKeepCollection));
   return `<article class="post-card ${options.clickable ? "post-card--clickable" : ""}" ${options.clickable && item.ref ? `data-open-collection="${escapeHtml(item.ref)}"` : ""}>
     <div class="post-card-head">
       <div class="meta-row meta-row--spread">
@@ -780,7 +929,7 @@ function renderCollectionCard(
           ${renderCollectionMode(item)}
         </div>
         <div class="button-row">
-          ${collectionLikeButton}
+          ${collectionDownloadButton}
         </div>
       </div>
       <h4>${escapeHtml(item.title)}</h4>
@@ -792,29 +941,218 @@ function renderCollectionCard(
   </article>`;
 }
 
-function renderFeedPostCard(item: FeedItem, network: NetworkStore) {
+function renderFeedPostCard(item: FeedItem, network: NetworkStore, downloadedMediaRefs: Set<string>) {
   if (!item.post) {
     return `<article class="activity-card"><div class="meta-row"><span class="pill">${escapeHtml(item.kind)}</span>${renderProfileLink(item.actorAccountId, item.actorUsername)}</div><h4>${escapeHtml(item.subjectTitle)}</h4><p>${escapeHtml(item.summary)}</p></article>`;
   }
+  const post = withDownloadedChildren(item.post, downloadedMediaRefs);
   return `<article class="activity-card feed-post-card" data-feed-title="${escapeHtml(item.post.title)}" ${item.collectionRef ? `data-open-collection="${escapeHtml(item.collectionRef)}"` : ""}>
     <div class="feed-post-head">
       <div class="meta-row">
         ${renderProfileLink(item.actorAccountId, item.actorUsername)}
-        ${renderCollectionType(item.post)}
-        ${renderCollectionMode(item.post)}
+        ${renderCollectionType(post)}
+        ${renderCollectionMode(post)}
       </div>
       <div class="button-row">
-        ${renderCollectionLikeButton(item.post, true)}
+        ${renderCollectionDownloadButton(post, true)}
       </div>
     </div>
     <div class="post-card-head">
-      <h4>${escapeHtml(item.post.title)}</h4>
-      ${(item.post.description || item.summary) ? `<p>${escapeHtml(item.post.description || item.summary)}</p>` : ""}
+      <h4>${escapeHtml(post.title)}</h4>
+      ${(post.description || item.summary) ? `<p>${escapeHtml(post.description || item.summary)}</p>` : ""}
     </div>
     <div class="post-child-grid">
-      ${item.post.children.length ? item.post.children.map(child => renderCollectionPreviewItem(child, network, { canKeep: false })).join("") : `<div class="empty-state empty-state--tight"></div>`}
+      ${post.children.length ? post.children.map(child => renderCollectionPreviewItem(child, network, { canKeep: false })).join("") : `<div class="empty-state empty-state--tight"></div>`}
     </div>
   </article>`;
+}
+
+function withDownloadedChildren(collection: ProfileSummary["collections"][number], downloadedMediaRefs: Set<string>) {
+  return {
+    ...collection,
+    children: collection.children.map(child => ({
+      ...child,
+      downloaded: Boolean(child.kind === "media" && child.ref && downloadedMediaRefs.has(child.ref))
+    }))
+  };
+}
+
+type LibraryMediaEntry = ProfileSummary["collections"][number]["children"][number];
+type LibraryFolderNode = {
+  label: string;
+  pathKey: string;
+  folders: Map<string, LibraryFolderNode>;
+  media: LibraryMediaEntry[];
+  collection: ProfileSummary["collections"][number] | null;
+};
+
+function createLibraryFolderNode(label: string, pathKey: string): LibraryFolderNode {
+  return { label, pathKey, folders: new Map(), media: [], collection: null };
+}
+
+function compareLibraryLabels(left: string, right: string) {
+  return left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" });
+}
+
+function buildLibraryTree(collections: ProfileSummary["collections"] = []) {
+  const root = createLibraryFolderNode("library", "");
+
+  const ensureFolder = (path: string[]) => {
+    let current = root;
+    let pathSoFar: string[] = [];
+    for (const segment of path) {
+      pathSoFar = [...pathSoFar, segment];
+      if (!current.folders.has(segment)) current.folders.set(segment, createLibraryFolderNode(segment, pathSoFar.join(">")));
+      current = current.folders.get(segment)!;
+    }
+    return current;
+  };
+
+  const insertChildren = (folderPath: string[], children: Array<LibraryMediaEntry & { children?: LibraryMediaEntry[] }> = []) => {
+    const folder = ensureFolder(folderPath);
+    for (const child of children) {
+      if (child.kind === "media") {
+        folder.media.push(child);
+        continue;
+      }
+      const nestedPath = [...folderPath, child.title];
+      ensureFolder(nestedPath);
+      if (Array.isArray((child as any).children) && (child as any).children.length) insertChildren(nestedPath, (child as any).children);
+    }
+  };
+
+  for (const item of collections) {
+    const basePath = libraryPathForCollection(item);
+    if (item.sourceKind === "media") {
+      insertChildren(basePath, item.children as Array<LibraryMediaEntry & { children?: LibraryMediaEntry[] }>);
+      continue;
+    }
+    const packagePath = [...basePath, item.title];
+    const folder = ensureFolder(packagePath);
+    folder.collection = item;
+    insertChildren(packagePath, item.children as Array<LibraryMediaEntry & { children?: LibraryMediaEntry[] }>);
+  }
+
+  return root;
+}
+
+function resolveLibraryBrowse(root: LibraryFolderNode, browsePath: string[] = []) {
+  let current = root;
+  const resolvedPath: string[] = [];
+  for (const segment of browsePath) {
+    const next = current.folders.get(segment);
+    if (!next) break;
+    current = next;
+    resolvedPath.push(next.label);
+  }
+  return {
+    path: resolvedPath,
+    current,
+    folders: [...current.folders.values()].sort((left, right) => compareLibraryLabels(left.label, right.label)),
+    media: [...current.media]
+  };
+}
+
+function describeLibraryFolder(node: LibraryFolderNode) {
+  const parts = [];
+  if (node.folders.size) parts.push(`${node.folders.size} folder${node.folders.size === 1 ? "" : "s"}`);
+  if (node.media.length) parts.push(`${node.media.length} item${node.media.length === 1 ? "" : "s"}`);
+  return parts.join(" · ") || "Open";
+}
+
+function renderLibraryBreadcrumb(path: string[]) {
+  return `<div class="library-breadcrumbs" aria-label="Library path">
+    ${path.length ? `<a class="library-path-link" href="#" data-open-library-root="true">library</a>` : `<span class="library-path-current">library</span>`}
+    ${path.map((segment, index) => `<span class="library-breadcrumb-separator">/</span>${index === path.length - 1 ? `<span class="library-path-current">${escapeHtml(segment)}</span>` : `<a class="library-path-link" href="#" data-open-library-path="${escapeHtml(path.slice(0, index + 1).join(">"))}">${escapeHtml(segment)}</a>`}`).join("")}
+  </div>`;
+}
+
+function renderLibraryFolderTile(node: LibraryFolderNode) {
+  return `<button class="library-folder-tile" type="button" data-open-library-path="${escapeHtml(node.pathKey)}">
+    <span class="library-folder-tile-icon" aria-hidden="true"><span class="library-folder-icon-tab"></span><span class="library-folder-icon-body"></span></span>
+    <span class="library-folder-tile-copy">
+      <h4>${escapeHtml(node.label)}</h4>
+      <p>${escapeHtml(describeLibraryFolder(node))}</p>
+    </span>
+  </button>`;
+}
+
+function renderLibraryMediaPreview(item: LibraryMediaEntry, network: NetworkStore) {
+  if (item.mediaType === "image" && item.assetUrl) return `<div class="library-media-preview"><img src="${escapeHtml(item.assetUrl)}" alt=""></div>`;
+  if (item.mediaType === "video" && item.assetUrl) return `<div class="library-media-preview"><video muted playsinline preload="metadata" src="${escapeHtml(item.assetUrl)}"></video></div>`;
+  if (item.mediaType === "image") return previewHtml(item as any, network).replace("media-preview", "library-media-preview");
+  const label = item.mediaType === "audio" ? "PLAY" : item.mediaType === "text" ? "READ" : item.mediaType.toUpperCase();
+  return `<div class="library-media-preview library-media-preview--label"><span>${escapeHtml(label)}</span></div>`;
+}
+
+function renderLibraryMediaTile(item: LibraryMediaEntry, network: NetworkStore) {
+  const href = item.assetUrl || "";
+  const openAttrs = href ? `href="${escapeHtml(href)}" target="_blank" rel="noreferrer"` : `role="group"`;
+  const tag = href ? "a" : "div";
+  return `<${tag} class="library-media-tile" ${openAttrs} data-library-media-title="${escapeHtml(item.title)}">
+    ${renderLibraryMediaPreview(item, network)}
+    <span class="library-media-copy">
+      <h4>${escapeHtml(item.title)}</h4>
+      <p>${escapeHtml(item.creatorUsername ? `@${item.creatorUsername}` : item.mediaType)}</p>
+    </span>
+  </${tag}>`;
+}
+
+function renderLibraryBrowser(root: LibraryFolderNode, browsePath: string[], network: NetworkStore) {
+  const current = resolveLibraryBrowse(root, browsePath);
+  const removableCollection = current.current.collection?.ref && !current.current.collection?.owned && current.current.collection?.sourceKind !== "media"
+    ? renderDownloadButton({
+        active: true,
+        action: "unkeep-collection",
+        value: current.current.collection.ref,
+        label: "Downloaded and seeding"
+      })
+    : "";
+  const entries = [
+    ...current.folders.map(node => renderLibraryFolderTile(node)),
+    ...current.media.map(item => renderLibraryMediaTile(item, network))
+  ].join("");
+  const empty = !entries
+    ? `<div class="empty-state empty-state--quiet">Upload something to start building your library.</div>`
+    : "";
+  return `<div class="library-browser">
+    <div class="library-browser-head">
+      <div class="library-browser-copy">${renderLibraryBreadcrumb(current.path)}</div>
+      <div class="button-row">${removableCollection}<button class="button-primary" data-open-media-modal="true">+</button></div>
+    </div>
+    ${entries ? `<div class="library-entry-grid">${entries}</div>` : empty}
+  </div>`;
+}
+
+function renderStructuredUploadFields(state: { local: LocalStore }) {
+  const kind = state.local.uploadDraftKind;
+  if (kind === "show") {
+    return `<div class="form-grid cols-2">
+      <div class="field"><label for="upload-series-title">Show</label><input id="upload-series-title" data-upload-draft-field="seriesTitle" value="${escapeHtml(state.local.uploadDraftSeriesTitle)}" placeholder="Signal Bureau"></div>
+      <div class="field"><label for="upload-season-label">Season</label><input id="upload-season-label" data-upload-draft-field="seasonLabel" value="${escapeHtml(state.local.uploadDraftSeasonLabel)}" placeholder="Season 1"></div>
+    </div>`;
+  }
+  if (kind === "graphic_novel") {
+    return `<div class="form-grid cols-2">
+      <div class="field"><label for="upload-series-title">Series</label><input id="upload-series-title" data-upload-draft-field="seriesTitle" value="${escapeHtml(state.local.uploadDraftSeriesTitle)}" placeholder="Night Panels"></div>
+      <div class="field"><label for="upload-title">Volume</label><input id="upload-title" data-upload-draft-field="title" value="${escapeHtml(state.local.uploadDraftTitle)}" placeholder="Volume 1"></div>
+    </div>`;
+  }
+  return `<div class="field"><label for="upload-title">Title</label><input id="upload-title" data-upload-draft-field="title" value="${escapeHtml(state.local.uploadDraftTitle)}" placeholder="Package title"></div>`;
+}
+
+function renderUploadDraftRows(rows: UploadDraftRow[]) {
+  if (!rows.length) return `<div class="empty-state empty-state--tight upload-draft-empty">Drop files here or choose files to begin.</div>`;
+  return `<div class="upload-draft-rows">${rows.map(row => `<article class="upload-draft-row" data-upload-row="${escapeHtml(row.id)}">
+    <div class="upload-draft-handle" draggable="true" data-upload-drag-row="${escapeHtml(row.id)}" aria-label="Drag to reorder">::</div>
+    <input class="upload-draft-title" data-upload-row-title="${escapeHtml(row.id)}" value="${escapeHtml(row.title)}" aria-label="Row title">
+    <div class="upload-draft-meta">
+      <span class="pill">${escapeHtml(row.mediaType)}</span>
+      <span>${escapeHtml(row.fileName)}</span>
+      <span>${escapeHtml(row.sizeLabel)}</span>
+    </div>
+    <button class="button-ghost upload-draft-remove" type="button" data-remove-upload-row="${escapeHtml(row.id)}">Remove</button>
+  </article>`).join("")}</div>`;
 }
 
 function defaultTilePosition(index: number) {
@@ -839,6 +1177,7 @@ function resolveOverlayCollection(snapshot: AppSnapshot, ref: string | null) {
 }
 
 function renderOverlay(snapshot: AppSnapshot, state: { network: NetworkStore; local: LocalStore }) {
+  const downloadedMediaRefs = new Set((snapshot.library.keptMedia || []).map(item => (item as any).ref || item.id));
   const collection = resolveOverlayCollection(snapshot, state.local.collectionOverlayRef);
   if (collection) {
     return `<div class="overlay-backdrop">
@@ -850,83 +1189,53 @@ function renderOverlay(snapshot: AppSnapshot, state: { network: NetworkStore; lo
           </div>
           <button class="button-ghost" type="button" data-close-collection="true">Close</button>
         </div>
-        ${renderCollectionCard(collection, state.network, { canKeepChildren: true, canKeepCollection: collection.sourceKind !== "media" })}
+        ${renderCollectionCard(withDownloadedChildren(collection, downloadedMediaRefs), state.network, { canKeepChildren: true, canKeepCollection: collection.sourceKind !== "media" })}
       </section>
     </div>`;
   }
   const mode = state.local.overlayMode;
-  if (!mode) return "";
+  if (mode !== "media") return "";
   if (mode === "media") {
     return `<div class="overlay-backdrop">
-      <section class="overlay-panel" role="dialog" aria-modal="true" aria-label="Add media">
-        <div class="overlay-header"><h3 class="subsection-title">+media</h3><button class="button-ghost" type="button" data-close-overlay="true">Close</button></div>
+      <section class="overlay-panel overlay-panel--wide" role="dialog" aria-modal="true" aria-label="Upload package">
+        <div class="overlay-header"><h3 class="subsection-title">Upload Package</h3><button class="button-ghost" type="button" data-close-overlay="true">Close</button></div>
         <form id="upload-form" class="form-grid form-grid--stack">
-          <div class="field"><label for="upload-title">Title</label><input id="upload-title" name="title" placeholder="Optional title"></div>
-          <div class="field"><label for="upload-type">Type</label><select id="upload-type" name="mediaType"><option value="image">image</option><option value="audio">audio</option><option value="video">video</option><option value="text">text</option></select></div>
-          <div class="field"><label for="upload-description">Notes</label><textarea id="upload-description" name="description" placeholder="Optional notes"></textarea></div>
-          <div class="field"><label for="upload-file">File</label><input id="upload-file" name="file" type="file" required></div>
-          <div class="button-row"><button class="button-primary" type="submit">Add</button></div>
+          <div class="form-grid cols-2">
+            <div class="field"><label for="upload-kind">Type</label><select id="upload-kind" data-upload-draft-field="kind">${PACKAGE_KIND_OPTIONS.map(option => `<option value="${escapeHtml(option.value)}" ${state.local.uploadDraftKind === option.value ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}</select></div>
+            <div class="field"><label for="upload-description">Notes</label><input id="upload-description" data-upload-draft-field="description" value="${escapeHtml(state.local.uploadDraftDescription)}" placeholder="Optional notes"></div>
+          </div>
+          ${renderStructuredUploadFields(state)}
+          <label class="upload-dropzone" for="upload-files">
+            <span>Drop files here or choose files</span>
+            <input id="upload-files" type="file" multiple data-upload-files="true">
+          </label>
+          ${renderUploadDraftRows(state.local.uploadDraftRows)}
+          <div class="button-row"><button class="button-primary" type="submit" ${state.local.uploadDraftRows.length ? "" : "disabled"}>Publish</button></div>
         </form>
       </section>
     </div>`;
   }
-  const media = (snapshot.shelfMedia || []).slice();
-  const coverOptions = (snapshot.shelfMedia || []).filter(item => item.mediaType === "image" && item.creatorAccountId === snapshot.currentAccount?.accountId);
-  return `<div class="overlay-backdrop">
-    <section class="overlay-panel overlay-panel--wide" role="dialog" aria-modal="true" aria-label="New folder">
-      <div class="overlay-header"><h3 class="subsection-title">+folder</h3><button class="button-ghost" type="button" data-close-overlay="true">Close</button></div>
-      <form id="collection-form" class="form-grid form-grid--stack">
-        <div class="field"><label for="collection-title">Title</label><input id="collection-title" name="title" placeholder="Optional title"></div>
-        <div class="field"><label for="collection-type">Type</label><select id="collection-type" name="type"><option value="folder">folder</option><option value="gallery">gallery</option><option value="playlist">playlist</option><option value="album">album</option><option value="series">series</option><option value="book">book</option><option value="curated">curated</option></select></div>
-        <div class="field"><label for="collection-description">Notes</label><textarea id="collection-description" name="description" placeholder="Optional notes"></textarea></div>
-        <div class="field"><label for="collection-cover-ref">Cover from Library</label><select id="collection-cover-ref" name="coverRef"><option value="">None</option>${coverOptions.map(item => `<option value="${escapeHtml(item.ref || item.id)}">${escapeHtml(item.title)}</option>`).join("")}</select></div>
-        <div class="field"><label for="collection-cover-file">Or Upload Cover</label><input id="collection-cover-file" name="coverFile" type="file" accept="image/*"></div>
-        <div class="button-row"><button class="button-primary" type="submit">Create</button></div>
-      </form>
-      <div class="overlay-rows">
-        <div class="sheet sheet--stack">
-          ${blockTitle("Selected")}
-          ${snapshot.draftChildren.length ? `<div class="modal-strip" data-selected-strip="true">${snapshot.draftChildren.map(item => `<article class="collection-item-card">
-            <h4>${escapeHtml(item.title)}</h4>
-            <div class="button-row"><button class="chip-button" data-move-draft-child="${escapeHtml((item as any).ref || item.id)}" data-direction="up">Up</button><button class="chip-button" data-move-draft-child="${escapeHtml((item as any).ref || item.id)}" data-direction="down">Down</button><button class="chip-button" data-remove-draft-child="${escapeHtml((item as any).ref || item.id)}">Remove</button></div>
-          </article>`).join("")}</div>` : `<div class="empty-state empty-state--tight" data-selected-strip="true"></div>`}
-        </div>
-        <div class="sheet sheet--stack">
-          ${blockTitle("Media")}
-          <div class="modal-strip" data-media-strip="true">${media.map(item => `<article class="collection-item-card">
-            <h4>${escapeHtml(item.title)}</h4>
-            <div class="meta-row"><span class="pill">${escapeHtml(item.mediaType)}</span></div>
-            <div class="button-row"><button class="button-secondary" data-add-draft-child="${escapeHtml((item as any).ref || item.id)}">Add</button></div>
-          </article>`).join("")}</div>
-        </div>
-      </div>
-    </section>
-  </div>`;
+  return "";
 }
 
 function renderSection(snapshot: AppSnapshot, state: { network: NetworkStore; local: LocalStore }) {
   const activeSection = snapshot.activeSection === "upload" ? "library" : snapshot.activeSection;
+  const downloadedMediaRefs = new Set((snapshot.library.keptMedia || []).map(item => (item as any).ref || item.id));
   if (activeSection === "discover") {
+    const discoverPosts = snapshot.feed.filter(item => item.kind === "post" && item.post);
     return `<section class="section-block section-block--discover">
-      ${snapshot.discoverQuery ? `<div class="sheet people-sheet">${blockTitle("Profiles", `Results for ${snapshot.discoverQuery}`)}${snapshot.searchResults.length ? `<div class="simple-list" data-search-results="true">${snapshot.searchResults.map(item => renderDiscoverProfileCard(item, snapshot.currentAccount?.accountId || null)).join("")}</div>` : `<div class="empty-state empty-state--tight discover-empty">No users matched that search.</div>`}</div>` : ""}
       <div class="sheet feed-sheet">
-        ${blockTitle("Discover", "New collections and activity from the accounts you follow.")}
-        ${snapshot.feed.length ? `<div class="activity-stack">${snapshot.feed.map(item => renderFeedPostCard(item, state.network)).join("")}</div>` : `<div class="empty-state empty-state--quiet"></div>`}
+        ${blockTitle("Discover", "New media packages from creators you follow.")}
+        ${discoverPosts.length ? `<div class="activity-stack">${discoverPosts.map(item => renderFeedPostCard(item, state.network, downloadedMediaRefs)).join("")}</div>` : `<div class="empty-state empty-state--quiet"></div>`}
       </div>
-      ${!snapshot.discoverQuery ? `<div class="sheet people-sheet">${blockTitle("People To Follow", "Find more creators when you want new additions to your library.")}${snapshot.suggestions.length ? `<div class="simple-list">${snapshot.suggestions.map(item => renderDiscoverProfileCard(item, snapshot.currentAccount?.accountId || null)).join("")}</div>` : `<div class="empty-state empty-state--tight discover-empty">No suggestions yet.</div>`}</div>` : ""}
+      <div class="sheet people-sheet">${blockTitle("People To Follow", "Find more creators when you want new additions to your library.")}${snapshot.suggestions.length ? `<div class="simple-list">${snapshot.suggestions.map(item => renderDiscoverProfileCard(item, snapshot.currentAccount?.accountId || null)).join("")}</div>` : `<div class="empty-state empty-state--tight discover-empty">No suggestions yet.</div>`}</div>
     </section>`;
   }
   if (activeSection === "library") {
-    const collections = snapshot.library.collections;
+    const tree = buildLibraryTree(snapshot.library.collections);
     return `<section class="section-block section-block--library">
       <div class="sheet">
-        <div class="library-toolbar">
-          <div class="button-row">
-            <button class="button-primary" data-open-media-modal="true">+media</button>
-            <button class="button-secondary" data-open-folder-modal="true">+folder</button>
-          </div>
-        </div>
-        ${collections.length ? `<div class="post-stack">${collections.map(item => renderCollectionCard(item, state.network, { canKeepChildren: false, canKeepCollection: true, clickable: true })).join("")}</div>` : `<div class="empty-state empty-state--quiet"></div>`}
+        ${renderLibraryBrowser(tree, state.local.libraryBrowsePath || [], state.network)}
       </div>
     </section>`;
   }
@@ -948,8 +1257,8 @@ function renderSection(snapshot: AppSnapshot, state: { network: NetworkStore; lo
       </div>
       <div class="profile-layout profile-layout--rows">
         <div class="sheet">
-          ${blockTitle(isOwnProfile ? "Collections" : `${profile.displayName}'s Collections`)}
-          ${profile.collections.length ? `<div class="post-stack">${profile.collections.map(item => renderCollectionCard(item, state.network, { canKeepChildren: !isOwnProfile, canKeepCollection: true, clickable: true })).join("")}</div>` : `<div class="empty-state empty-state--quiet"></div>`}
+          ${blockTitle(isOwnProfile ? "Releases" : `${profile.displayName}'s Releases`)}
+          ${profile.collections.length ? `<div class="post-stack">${profile.collections.map(item => renderCollectionCard(withDownloadedChildren(item, downloadedMediaRefs), state.network, { canKeepChildren: !isOwnProfile, canKeepCollection: true, clickable: true })).join("")}</div>` : `<div class="empty-state empty-state--quiet"></div>`}
         </div>
       </div>
     </section>`;
@@ -979,10 +1288,20 @@ function renderBrandLockup() {
 }
 
 function renderHeaderSearchPanel(snapshot: AppSnapshot) {
-  return `<form id="header-search-form" class="header-search-inline" role="search">
-    <input id="header-search-query" class="header-search-input" name="query" value="${escapeHtml(snapshot.discoverQuery)}" placeholder="Search for a user" autocomplete="off">
-    <button class="button-secondary" type="submit">Go</button>
-  </form>`;
+  const results = snapshot.discoverQuery
+    ? (
+        snapshot.searchResults.length
+          ? `<div class="header-search-results simple-list" data-search-results="true">${snapshot.searchResults.map(item => renderHeaderSearchResultCard(item, snapshot.currentAccount?.accountId || null)).join("")}</div>`
+          : `<div class="header-search-empty" data-search-results="true">No users matched that search.</div>`
+      )
+    : "";
+  return `<div class="header-search-panel">
+    <form id="header-search-form" class="header-search-inline" role="search">
+      <input id="header-search-query" class="header-search-input" name="query" value="${escapeHtml(snapshot.discoverQuery)}" placeholder="Search for a user" autocomplete="off">
+      <button class="button-secondary" type="submit">Go</button>
+    </form>
+    ${results}
+  </div>`;
 }
 
 function renderNavigation(snapshot: AppSnapshot, searchOpen: boolean) {
@@ -1011,6 +1330,7 @@ function createApiController(storage: StorageLike) {
   let lastSnapshot: AppSnapshot | null = null;
   const clientId = storage.getItem(clientStorageKey) || (globalThis.crypto?.randomUUID?.() || `client-${Date.now()}`);
   storage.setItem(clientStorageKey, clientId);
+  const uploadFiles = new Map<string, File>();
   const rawLayout = storage.getItem(LIBRARY_LAYOUT_STORAGE_KEY);
   let parsedLayout: Record<string, { x: number; y: number }> = {};
   if (rawLayout) {
@@ -1020,9 +1340,11 @@ function createApiController(storage: StorageLike) {
     currentAccountId: null as string | null,
     searchOpen: false,
     collectionDraftChildIds: [] as string[],
+    libraryBrowsePath: [] as string[],
     libraryLayout: parsedLayout,
     overlayMode: null as "media" | "folder" | null,
-    collectionOverlayRef: null as string | null
+    collectionOverlayRef: null as string | null,
+    ...emptyUploadDraft()
   };
   const request = async (url: string, init?: RequestInit) => {
     const response = await fetch(url, init);
@@ -1045,7 +1367,7 @@ function createApiController(storage: StorageLike) {
   const assetUrlForRef = (ref?: string) => ref ? `/api/media?clientId=${encodeURIComponent(clientId)}&mediaRef=${encodeURIComponent(ref)}` : null;
   const decorateLibraryItem = <T extends LibraryItem>(item: T): T => ({
     ...item,
-    assetUrl: (item as any).kind === "collection" || item.mediaType === "text" ? null : assetUrlForRef(item.ref)
+    assetUrl: (item as any).kind === "collection" ? null : assetUrlForRef(item.ref)
   });
   const decorateWorkspaceItem = (item: WorkspaceItem): WorkspaceItem => ({
     ...decorateLibraryItem(item),
@@ -1055,7 +1377,7 @@ function createApiController(storage: StorageLike) {
     ...collection,
     children: collection.children.map(child => ({
       ...child,
-      assetUrl: child.kind === "media" && child.mediaType !== "text" ? assetUrlForRef(child.ref) : null
+      assetUrl: child.kind === "media" ? assetUrlForRef(child.ref) : null
     }))
   });
   const decorateSnapshot = (snapshot: AppSnapshot): AppSnapshot => ({
@@ -1092,7 +1414,21 @@ function createApiController(storage: StorageLike) {
     getState() {
       return {
         network: {} as NetworkStore,
-        local: { currentAccountId: localState.currentAccountId, searchOpen: localState.searchOpen, collectionDraftChildIds: localState.collectionDraftChildIds, libraryLayout: localState.libraryLayout, overlayMode: localState.overlayMode, collectionOverlayRef: localState.collectionOverlayRef } as any
+        local: {
+          currentAccountId: localState.currentAccountId,
+          searchOpen: localState.searchOpen,
+          collectionDraftChildIds: localState.collectionDraftChildIds,
+          libraryBrowsePath: localState.libraryBrowsePath,
+          libraryLayout: localState.libraryLayout,
+          overlayMode: localState.overlayMode,
+          collectionOverlayRef: localState.collectionOverlayRef,
+          uploadDraftKind: localState.uploadDraftKind,
+          uploadDraftTitle: localState.uploadDraftTitle,
+          uploadDraftDescription: localState.uploadDraftDescription,
+          uploadDraftSeriesTitle: localState.uploadDraftSeriesTitle,
+          uploadDraftSeasonLabel: localState.uploadDraftSeasonLabel,
+          uploadDraftRows: localState.uploadDraftRows
+        } as any
       };
     },
     async createAccount(input: { username: string; displayName: string; bio: string }) { return postAction("createAccount", { input }); },
@@ -1104,6 +1440,7 @@ function createApiController(storage: StorageLike) {
       localState.searchOpen = true;
       return postAction("searchProfiles", { query });
     },
+    async clearSearch() { return postAction("clearSearch"); },
     async followAccount(accountId: string) { return postAction("followAccount", { accountId }); },
     async keepMedia(mediaRef: string) { return postAction("keepMedia", { mediaRef }); },
     async keepCollection(collectionRef: string) { return postAction("keepCollection", { collectionRef }); },
@@ -1122,6 +1459,36 @@ function createApiController(storage: StorageLike) {
         }
       });
     },
+    async publishStructuredUpload() {
+      const rows = [];
+      for (const row of localState.uploadDraftRows) {
+        const file = uploadFiles.get(row.id);
+        if (!file) continue;
+        const upload = await fileToInput(file, row.mediaType);
+        rows.push({
+          title: row.title,
+          fileName: row.fileName,
+          mediaType: row.mediaType,
+          description: "",
+          dataBase64: upload.dataUrl ? upload.dataUrl.split(",")[1] || "" : btoa(upload.textPreview || "")
+        });
+      }
+      const result = await postAction("publishStructuredUpload", {
+        input: {
+          packageKind: localState.uploadDraftKind,
+          title: localState.uploadDraftTitle,
+          description: localState.uploadDraftDescription,
+          seriesTitle: localState.uploadDraftSeriesTitle,
+          seasonLabel: localState.uploadDraftSeasonLabel,
+          rows
+        }
+      });
+      uploadFiles.clear();
+      Object.assign(localState, emptyUploadDraft());
+      localState.overlayMode = null;
+      localState.libraryBrowsePath = [];
+      return result;
+    },
     async createCollection(input: { title: string; type: string; description: string; isCurated: boolean; childIds: string[]; coverId?: string | null }) {
       return postAction("createCollection", {
         input: {
@@ -1136,6 +1503,7 @@ function createApiController(storage: StorageLike) {
     },
     async setSection(section: SectionName) {
       localState.searchOpen = false;
+      if (section === "library") localState.libraryBrowsePath = [];
       return postAction("setSection", { section });
     },
     async dismissFlash() { return postAction("dismissFlash"); },
@@ -1145,6 +1513,53 @@ function createApiController(storage: StorageLike) {
     closeOverlay() { localState.overlayMode = null; },
     openCollection(ref: string) { localState.collectionOverlayRef = ref; localState.overlayMode = null; },
     closeCollection() { localState.collectionOverlayRef = null; },
+    openLibraryPath(pathKey: string) { localState.libraryBrowsePath = String(pathKey || "").split(">").map(part => part.trim()).filter(Boolean); },
+    openLibraryRoot() { localState.libraryBrowsePath = []; },
+    setUploadDraftField(field: "kind" | "title" | "description" | "seriesTitle" | "seasonLabel", value: string) {
+      if (field === "kind") localState.uploadDraftKind = value as PackageKind;
+      else if (field === "title") localState.uploadDraftTitle = value;
+      else if (field === "description") localState.uploadDraftDescription = value;
+      else if (field === "seriesTitle") localState.uploadDraftSeriesTitle = value;
+      else if (field === "seasonLabel") localState.uploadDraftSeasonLabel = value;
+    },
+    appendUploadFiles(files: File[]) {
+      const rows = files
+        .map(file => {
+          const mediaType = inferMediaTypeFromFile(file);
+          if (!mediaType) return null;
+          const id = globalThis.crypto?.randomUUID?.() || `upload-${Date.now()}-${Math.random()}`;
+          uploadFiles.set(id, file);
+          return {
+            id,
+            title: fileBaseTitle(file.name),
+            fileName: file.name,
+            mediaType,
+            sizeLabel: fileSizeLabel(file.size)
+          } as UploadDraftRow;
+        })
+        .filter(Boolean) as UploadDraftRow[];
+      localState.uploadDraftRows = [...localState.uploadDraftRows, ...rows];
+    },
+    updateUploadRowTitle(rowId: string, value: string) {
+      localState.uploadDraftRows = localState.uploadDraftRows.map(row => row.id === rowId ? { ...row, title: value } : row);
+    },
+    removeUploadRow(rowId: string) {
+      uploadFiles.delete(rowId);
+      localState.uploadDraftRows = localState.uploadDraftRows.filter(row => row.id !== rowId);
+    },
+    moveUploadRow(rowId: string, targetRowId: string) {
+      const currentIndex = localState.uploadDraftRows.findIndex(row => row.id === rowId);
+      const targetIndex = localState.uploadDraftRows.findIndex(row => row.id === targetRowId);
+      if (currentIndex < 0 || targetIndex < 0 || currentIndex === targetIndex) return;
+      const next = localState.uploadDraftRows.slice();
+      const [row] = next.splice(currentIndex, 1);
+      next.splice(targetIndex, 0, row);
+      localState.uploadDraftRows = next;
+    },
+    resetUploadDraft() {
+      uploadFiles.clear();
+      Object.assign(localState, emptyUploadDraft());
+    },
     setLibraryTilePosition(ref: string, x: number, y: number) {
       localState.libraryLayout[ref] = { x, y };
       storage.setItem(LIBRARY_LAYOUT_STORAGE_KEY, JSON.stringify(localState.libraryLayout));
@@ -1166,11 +1581,18 @@ export async function startApp(root: HTMLElement, storage: StorageLike = window.
   const controller = createApiController(storage);
   await controller.initialize();
   let dragState: { ref: string; offsetX: number; offsetY: number } | null = null;
+  let uploadDragRowId: string | null = null;
   root.addEventListener("click", async event => {
-    const target = (event.target as HTMLElement)?.closest?.("[data-nav],[data-toggle-search],[data-open-compose],[data-open-media-modal],[data-open-folder-modal],[data-close-overlay],[data-close-collection],[data-dismiss-flash],[data-open-profile],[data-open-collection],[data-follow-account],[data-keep-media],[data-keep-collection],[data-unkeep-collection],[data-add-draft-child],[data-remove-draft-child],[data-move-draft-child],[data-reset-draft]") as HTMLElement | null;
+    const target = (event.target as HTMLElement)?.closest?.("[data-nav],[data-toggle-search],[data-open-compose],[data-open-media-modal],[data-open-library-path],[data-open-library-root],[data-close-overlay],[data-close-collection],[data-dismiss-flash],[data-open-profile],[data-open-collection],[data-follow-account],[data-keep-media],[data-keep-collection],[data-unkeep-collection],[data-add-draft-child],[data-remove-draft-child],[data-move-draft-child],[data-reset-draft],[data-remove-upload-row]") as HTMLElement | null;
     if (!target) return;
+    if (target.tagName === "A") event.preventDefault();
     let handled = true;
-    if (target.dataset.toggleSearch) (controller as any).toggleSearch?.();
+    if (target.dataset.toggleSearch) {
+      if (controller.getState().local.searchOpen) {
+        (controller as any).closeSearch?.();
+        await (controller as any).clearSearch?.();
+      } else (controller as any).toggleSearch?.();
+    }
     else if (target.dataset.nav === "profile") {
       const currentAccountId = controller.getState().local.currentAccountId;
       if (currentAccountId) {
@@ -1181,7 +1603,8 @@ export async function startApp(root: HTMLElement, storage: StorageLike = window.
     else if (target.dataset.nav) await controller.setSection(target.dataset.nav as SectionName);
     else if (target.dataset.openCompose) await controller.setSection("upload");
     else if (target.dataset.openMediaModal) (controller as any).openOverlay?.("media");
-    else if (target.dataset.openFolderModal) (controller as any).openOverlay?.("folder");
+    else if (target.dataset.openLibraryPath) (controller as any).openLibraryPath?.(target.dataset.openLibraryPath);
+    else if (target.dataset.openLibraryRoot) (controller as any).openLibraryRoot?.();
     else if (target.dataset.closeOverlay) (controller as any).closeOverlay?.();
     else if (target.dataset.closeCollection) (controller as any).closeCollection?.();
     else if (target.dataset.dismissFlash) await controller.dismissFlash();
@@ -1203,9 +1626,71 @@ export async function startApp(root: HTMLElement, storage: StorageLike = window.
     else if (target.dataset.removeDraftChild) await controller.removeDraftChild(target.dataset.removeDraftChild);
     else if (target.dataset.moveDraftChild) await controller.moveDraftChild(target.dataset.moveDraftChild, (target.dataset.direction as "up" | "down") || "up");
     else if (target.dataset.resetDraft) await controller.resetDraft();
+    else if (target.dataset.removeUploadRow) (controller as any).removeUploadRow?.(target.dataset.removeUploadRow);
     else handled = false;
     if (!handled) return;
     await renderApp(root, controller);
+  });
+  root.addEventListener("dragstart", event => {
+    const handle = (event.target as HTMLElement)?.closest?.("[data-upload-drag-row]") as HTMLElement | null;
+    if (!handle) return;
+    uploadDragRowId = handle.dataset.uploadDragRow || null;
+    event.dataTransfer?.setData("text/plain", uploadDragRowId || "");
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+  });
+  root.addEventListener("dragover", event => {
+    const row = (event.target as HTMLElement)?.closest?.("[data-upload-row]") as HTMLElement | null;
+    const dropzone = (event.target as HTMLElement)?.closest?.(".upload-dropzone") as HTMLElement | null;
+    if (!row && !dropzone) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  });
+  root.addEventListener("drop", async event => {
+    const row = (event.target as HTMLElement)?.closest?.("[data-upload-row]") as HTMLElement | null;
+    const dropzone = (event.target as HTMLElement)?.closest?.(".upload-dropzone") as HTMLElement | null;
+    if (dropzone) {
+      event.preventDefault();
+      const files = [...(event.dataTransfer?.files || [])];
+      if (files.length) {
+        (controller as any).appendUploadFiles?.(files);
+        await renderApp(root, controller);
+      }
+      uploadDragRowId = null;
+      return;
+    }
+    if (!row || !uploadDragRowId) return;
+    event.preventDefault();
+    (controller as any).moveUploadRow?.(uploadDragRowId, row.dataset.uploadRow || "");
+    uploadDragRowId = null;
+    await renderApp(root, controller);
+  });
+  root.addEventListener("change", async event => {
+    const target = event.target as HTMLElement | null;
+    if (!(target instanceof HTMLElement)) return;
+    if (target instanceof HTMLInputElement && target.dataset.uploadFiles === "true") {
+      const files = [...(target.files || [])];
+      if (!files.length) return;
+      (controller as any).appendUploadFiles?.(files);
+      target.value = "";
+      await renderApp(root, controller);
+      return;
+    }
+    if (target instanceof HTMLSelectElement && target.dataset.uploadDraftField === "kind") {
+      (controller as any).setUploadDraftField?.("kind", target.value);
+      await renderApp(root, controller);
+      return;
+    }
+  });
+  root.addEventListener("input", event => {
+    const target = event.target as HTMLElement | null;
+    if (!(target instanceof HTMLElement)) return;
+    if (target instanceof HTMLInputElement && target.dataset.uploadDraftField) {
+      (controller as any).setUploadDraftField?.(target.dataset.uploadDraftField, target.value);
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.dataset.uploadRowTitle) {
+      (controller as any).updateUploadRowTitle?.(target.dataset.uploadRowTitle, target.value);
+    }
   });
   root.addEventListener("pointerdown", event => {
     const tile = (event.target as HTMLElement)?.closest?.("[data-library-tile]") as HTMLElement | null;
@@ -1256,30 +1741,7 @@ export async function startApp(root: HTMLElement, storage: StorageLike = window.
       const data = new FormData(form);
       await controller.search(String(data.get("query") || ""));
     } else if (form.id === "upload-form") {
-      const data = new FormData(form);
-      const file = data.get("file");
-      const mediaType = String(data.get("mediaType") || "image");
-      if (file instanceof File) {
-        const upload = await fileToInput(file, mediaType);
-        upload.title = String(data.get("title") || upload.title);
-        upload.description = String(data.get("description") || "");
-        await controller.uploadMedia(upload);
-        (controller as any).closeOverlay?.();
-      }
-    } else if (form.id === "collection-form") {
-      const data = new FormData(form);
-      const draftChildren = controller.getState().local.collectionDraftChildIds.slice();
-      let coverId = String(data.get("coverRef") || "") || null;
-      const coverFile = data.get("coverFile");
-      if (!coverId && coverFile instanceof File && coverFile.size) {
-        const coverUpload = await fileToInput(coverFile, "image");
-        coverUpload.title = `${String(data.get("title") || coverUpload.title || "Cover")} Cover`;
-        const result = await controller.uploadMedia(coverUpload);
-        coverId = (result as any)?.mediaRef || null;
-      }
-      const collectionType = String(data.get("type") || "folder");
-      await controller.createCollection({ title: String(data.get("title") || ""), type: collectionType, description: String(data.get("description") || ""), isCurated: collectionType === "curated", childIds: draftChildren, coverId });
-      (controller as any).closeOverlay?.();
+      await (controller as any).publishStructuredUpload?.();
     }
     await renderApp(root, controller);
   }, { capture: true });

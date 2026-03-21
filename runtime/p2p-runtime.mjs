@@ -552,6 +552,8 @@ export class P2PRuntime {
       creatorAccountId: accountId,
       title: input.title,
       type: input.type,
+      packageKind: input.packageKind || null,
+      libraryPath: Array.isArray(input.libraryPath) ? input.libraryPath : [],
       description: input.description || '',
       coverMediaRef: input.coverMediaRef || null,
       isCurated: Boolean(input.isCurated),
@@ -673,7 +675,7 @@ export class P2PRuntime {
         kind: 'keep',
         subjectRef: keepRef.magnetURI,
         subjectTitle: media.title,
-        summary: `Keep + seed: ${media.title}`,
+        summary: `Downloaded and seeding: ${media.title}`,
         createdAt: keep.createdAt
       }
     ]
