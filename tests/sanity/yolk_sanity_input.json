@@ -7,7 +7,7 @@
           "type": "createAccount",
           "username": "alice",
           "displayName": "Alice Atlas",
-          "bio": "Collector and prototype host."
+          "bio": "Collector and host."
         },
         {
           "type": "openFeedPost",
@@ -22,7 +22,7 @@
           "type": "createAccount",
           "username": "alice",
           "displayName": "Alice Atlas",
-          "bio": "Collector and prototype host."
+          "bio": "Collector and host."
         }
       ]
     },
@@ -33,7 +33,7 @@
           "type": "createAccount",
           "username": "alice",
           "displayName": "Alice Atlas",
-          "bio": "Collector and prototype host."
+          "bio": "Collector and host."
         },
         {
           "type": "openFeedPost",
@@ -56,7 +56,7 @@
           "type": "createAccount",
           "username": "alice",
           "displayName": "Alice Atlas",
-          "bio": "Collector and prototype host."
+          "bio": "Collector and host."
         },
         {
           "type": "likeFeedPost",
@@ -75,7 +75,7 @@
           "type": "createAccount",
           "username": "alice",
           "displayName": "Alice Atlas",
-          "bio": "Collector and prototype host."
+          "bio": "Collector and host."
         },
         {
           "type": "openFeedPost",
@@ -90,7 +90,7 @@
           "type": "createAccount",
           "username": "alice",
           "displayName": "Alice Atlas",
-          "bio": "Collector and prototype host."
+          "bio": "Collector and host."
         },
         {
           "type": "gotoSection",
@@ -129,7 +129,7 @@
           "type": "createAccount",
           "username": "alice",
           "displayName": "Alice Atlas",
-          "bio": "Collector and prototype host."
+          "bio": "Collector and host."
         },
         {
           "type": "gotoSection",
@@ -166,7 +166,7 @@
           "type": "createAccount",
           "username": "alice",
           "displayName": "Alice Atlas",
-          "bio": "Collector and prototype host."
+          "bio": "Collector and host."
         },
         {
           "type": "openFeedPost",

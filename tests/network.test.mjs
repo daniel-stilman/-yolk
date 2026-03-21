@@ -3,8 +3,14 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { createBootstrapNode, P2PRuntime } from '../runtime/p2p-runtime.mjs'
+import { AppService } from '../runtime/app-service.mjs'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const repoRoot = path.join(__dirname, '..')
 
 async function createRuntimePair(namePrefix) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), `${namePrefix}-`))
@@ -81,5 +87,98 @@ test('keep downloads the torrent payload and continues seeding locally', async (
     assert.equal(payload, 'dock memo over torrent')
   } finally {
     await pair.destroy()
+  }
+})
+
+test('runtime restart republishes account heads and restores torrent availability', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'yolk-restart-'))
+  let bootstrap = await createBootstrapNode()
+  let creator = await P2PRuntime.create({
+    name: 'restart-creator',
+    baseDir: path.join(root, 'creator'),
+    bootstrap: [`127.0.0.1:${bootstrap.address.port}`]
+  })
+
+  try {
+    const account = await creator.createAccount({
+      username: 'sol',
+      displayName: 'Sol Mercer',
+      bio: 'Restarts should keep this intact.'
+    })
+    const published = await creator.publishMedia(account.accountId, {
+      title: 'Persistent Memo',
+      description: 'Should still resolve after restart.',
+      mediaType: 'text',
+      fileName: 'persistent-memo.txt',
+      data: Buffer.from('persistent runtime payload', 'utf8')
+    })
+
+    await creator.destroy()
+    await bootstrap.destroy()
+
+    bootstrap = await createBootstrapNode()
+    creator = await P2PRuntime.create({
+      name: 'restart-creator',
+      baseDir: path.join(root, 'creator'),
+      bootstrap: [`127.0.0.1:${bootstrap.address.port}`]
+    })
+    const collector = await P2PRuntime.create({
+      name: 'restart-collector',
+      baseDir: path.join(root, 'collector'),
+      bootstrap: [`127.0.0.1:${bootstrap.address.port}`]
+    })
+
+    try {
+      const resolvedProfile = await collector.resolveProfile(account.accountId)
+      assert.equal(resolvedProfile.profile.username, 'sol')
+      const kept = await collector.keepMedia((await collector.createAccount({
+        username: 'alice',
+        displayName: 'Alice Atlas',
+        bio: 'Collector'
+      })).accountId, published.mediaRef)
+      const payload = await fs.readFile(kept.downloadedPath, 'utf8')
+      assert.equal(payload, 'persistent runtime payload')
+      assert.equal(kept.seeded, true)
+    } finally {
+      await collector.destroy()
+    }
+  } finally {
+    await Promise.allSettled([creator?.destroy(), bootstrap?.destroy()])
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
+test('app service persists session state and saved library collections across restart', async () => {
+  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yolk-app-persist-'))
+  const clientId = 'persisted-client'
+  const sampleMediaDir = path.join(repoRoot, 'sample media')
+  let service = await AppService.create({ baseDir, sampleMediaDir })
+
+  try {
+    await service.createAccount(clientId, {
+      username: 'alice',
+      displayName: 'Alice Atlas',
+      bio: 'Collector'
+    })
+    const initial = await service.buildSnapshot(clientId)
+    const relay = initial.feed.find(item => item.subjectTitle === 'Crossfade Relay')
+    assert.ok(relay?.collectionRef, 'expected seeded collection in feed')
+    await service.keepCollection(clientId, relay.collectionRef)
+    await service.setSection(clientId, 'library')
+
+    const beforeRestart = await service.buildSnapshot(clientId)
+    assert.equal(beforeRestart.currentAccount?.username, 'alice')
+    assert.ok(beforeRestart.library.collections.some(item => item.title === 'Crossfade Relay'))
+
+    await service.destroy()
+    service = await AppService.create({ baseDir, sampleMediaDir })
+
+    const afterRestart = await service.buildSnapshot(clientId)
+    assert.equal(afterRestart.currentAccount?.username, 'alice')
+    assert.equal(afterRestart.activeSection, 'library')
+    assert.ok(afterRestart.library.collections.some(item => item.title === 'Crossfade Relay'))
+  } finally {
+    await service.destroy()
+    await fs.rm(baseDir, { recursive: true, force: true })
   }
 })

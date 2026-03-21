@@ -89,6 +89,26 @@ async function readJson(filePath, fallback = null) {
   }
 }
 
+async function pathExists(filePath) {
+  try {
+    await fs.access(filePath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function listFilesRecursive(rootDir) {
+  if (!await pathExists(rootDir)) return []
+  const entries = await fs.readdir(rootDir, { withFileTypes: true })
+  const files = await Promise.all(entries.map(async entry => {
+    const fullPath = path.join(rootDir, entry.name)
+    if (entry.isDirectory()) return listFilesRecursive(fullPath)
+    return [fullPath]
+  }))
+  return files.flat()
+}
+
 async function waitForTorrentDone(torrent) {
   if (torrent.done) return
   await new Promise((resolve, reject) => {
@@ -160,6 +180,8 @@ export class P2PRuntime {
     this.downloadDir = path.join(this.baseDir, 'downloads')
     this.cacheDir = path.join(this.baseDir, 'cache')
     this.accounts = {}
+    this.headsIndexFile = path.join(this.baseDir, 'heads.json')
+    this.headsIndex = {}
     this.dht = null
     this.client = null
   }
@@ -179,6 +201,7 @@ export class P2PRuntime {
       ensureDir(this.cacheDir)
     ])
     this.accounts = await readJson(this.accountsFile, {}) || {}
+    this.headsIndex = await readJson(this.headsIndexFile, {}) || {}
     this.dht = new DHT({ bootstrap: this.bootstrap, verify: DEFAULT_DHT_VERIFY })
     await waitForListen(this.dht, this.dhtPort)
     this.client = new WebTorrent({
@@ -189,6 +212,9 @@ export class P2PRuntime {
       torrentPort: this.torrentPort,
       dht: { bootstrap: this.bootstrap }
     })
+    await this.rebuildHeadsIndexFromLocalFiles()
+    await this.restoreLocalSeeds()
+    await this.republishMutableHeads()
   }
 
   async destroy() {
@@ -198,6 +224,80 @@ export class P2PRuntime {
 
   async saveAccounts() {
     await writeJson(this.accountsFile, this.accounts)
+  }
+
+  async saveHeadsIndex() {
+    await writeJson(this.headsIndexFile, this.headsIndex)
+  }
+
+  async rebuildHeadsIndexFromLocalFiles() {
+    const stateFiles = await listFilesRecursive(path.join(this.metaDir, 'states'))
+    let changed = false
+    for (const filePath of stateFiles) {
+      const state = await readJson(filePath)
+      if (!state?.accountId || typeof state.seq !== 'number' || !state.signature) continue
+      const account = this.accounts[state.accountId]
+      if (!account || !verifyRecord(state.accountId, state)) continue
+      const current = this.headsIndex[state.accountId]
+      if (current && current.seq >= state.seq) continue
+      const torrent = await this.seedFile(filePath, { name: path.basename(filePath) })
+      this.headsIndex[state.accountId] = {
+        accountId: state.accountId,
+        publicKey: account.publicKeyHex,
+        latestStateRef: torrent.magnetURI,
+        seq: state.seq,
+        updatedAt: state.updatedAt
+      }
+      changed = true
+    }
+    if (changed) await this.saveHeadsIndex()
+  }
+
+  async restoreLocalSeeds() {
+    const metaFiles = await listFilesRecursive(this.metaDir)
+    const contentFiles = await listFilesRecursive(this.contentDir)
+    for (const filePath of [...metaFiles, ...contentFiles]) {
+      await this.seedFile(filePath, { name: path.basename(filePath) })
+    }
+
+    for (const accountId of Object.keys(this.accounts)) {
+      const { head } = await this.resolveLocalState(accountId).catch(() => ({ head: null }))
+      if (!head?.latestStateRef) continue
+      const state = await this.downloadJsonRecord(head.latestStateRef, 'states').catch(() => null)
+      if (!state?.keepRefs?.length) continue
+      for (const keepRef of state.keepRefs) {
+        const keep = await this.downloadJsonRecord(keepRef, 'keeps').catch(() => null)
+        if (!keep?.mediaRef) continue
+        const media = await this.downloadJsonRecord(keep.mediaRef, 'media').catch(() => null)
+        if (!media?.contentRef || !media?.fileName) continue
+        const targetPath = path.join(this.downloadDir, accountId, media.id)
+        if (!await pathExists(path.join(targetPath, media.fileName))) continue
+        await this.addTorrent(media.contentRef, targetPath)
+      }
+    }
+  }
+
+  async republishMutableHeads() {
+    for (const [accountId, head] of Object.entries(this.headsIndex)) {
+      const account = this.accounts[accountId]
+      if (!account || !head?.latestStateRef) continue
+      const value = Buffer.from(stableStringify(head))
+      await waitForDhtPut(this.dht, {
+        k: Buffer.from(account.publicKeyHex, 'hex'),
+        seq: head.seq,
+        v: value,
+        sign: buffer => Buffer.from(nacl.sign.detached(new Uint8Array(buffer), fromHex(account.secretKeyHex)))
+      })
+    }
+  }
+
+  async resolveLocalState(accountId) {
+    const head = this.headsIndex[accountId]
+    if (!head?.latestStateRef) throw new Error(`Missing local head for ${accountId}`)
+    const state = await this.downloadJsonRecord(head.latestStateRef, 'states')
+    const verified = state.accountId === accountId && verifyRecord(accountId, state)
+    if (!verified) throw new Error(`Local account state signature failed for ${accountId}`)
+    return { head, state, verified }
   }
 
   async publishAccountState(accountId, state) {
@@ -212,6 +312,8 @@ export class P2PRuntime {
       seq: state.seq,
       updatedAt: state.updatedAt
     }
+    this.headsIndex[accountId] = head
+    await this.saveHeadsIndex()
     const value = Buffer.from(stableStringify(head))
     const mutableHash = await waitForDhtPut(this.dht, {
       k: Buffer.from(account.publicKeyHex, 'hex'),
@@ -328,6 +430,9 @@ export class P2PRuntime {
   }
 
   async resolveHead(accountId) {
+    if (this.accounts[accountId] && this.headsIndex[accountId]) {
+      return this.headsIndex[accountId]
+    }
     const hash = sha1(Buffer.from(accountId, 'hex'))
     const result = await waitForDhtGet(this.dht, hash)
     if (!result?.v || !result?.k) throw new Error(`Missing DHT head for ${accountId}`)
@@ -336,6 +441,8 @@ export class P2PRuntime {
   }
 
   async resolveState(accountId) {
+    const local = await this.resolveLocalState(accountId).catch(() => null)
+    if (local) return local
     const head = await this.resolveHead(accountId)
     const state = await this.downloadJsonRecord(head.latestStateRef, 'states')
     const verified = state.accountId === accountId && verifyRecord(accountId, state)

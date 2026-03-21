@@ -1,5 +1,5 @@
 /**
- * Yolk desktop-first prototype.
+ * Yolk desktop-first application.
  *
  * Sections
  * - types + helpers
@@ -507,7 +507,7 @@ async function ensureDemoNetwork(network: NetworkStore, now: () => string) {
   const amber = await createMedia(network, sol, { title: "Amber Lines", description: "An original image set from a ferry crossing at dusk.", mediaType: "image", fileName: "amber-lines.svg", dataUrl: demoSvg("Amber Lines", "#efb134"), textPreview: null }, now());
   const notes = await createMedia(network, sol, { title: "Field Notes Vol. 1", description: "A text dispatch about signal capture and drift.", mediaType: "text", fileName: "field-notes.txt", dataUrl: null, textPreview: "Waypoint sketches, ferry horns, and the first rough map of the harbor loop." }, now());
   await createCollection(network, sol, { title: "Harbor Studies", type: "gallery", description: "Sol's original collection of visual and written field work.", isCurated: false, childIds: [amber.id, notes.id] }, now());
-  const night = await createMedia(network, noor, { title: "Night Transit", description: "Audio drift sketches sequenced for late playback.", mediaType: "audio", fileName: "night-transit.mp3", dataUrl: null, textPreview: "Audio placeholder for prototype playback and metadata flows.", thumbnailRef: demoSvg("Night Transit", "#d98b2f") }, now());
+  const night = await createMedia(network, noor, { title: "Night Transit", description: "Audio drift sketches sequenced for late playback.", mediaType: "audio", fileName: "night-transit.mp3", dataUrl: null, textPreview: "Audio placeholder for playback and metadata flows.", thumbnailRef: demoSvg("Night Transit", "#d98b2f") }, now());
   await createCollection(network, noor, { title: "Crossfade Relay", type: "curated", description: "A curated collection that preserves Sol's original authorship alongside Noor's own release.", isCurated: true, childIds: [amber.id, night.id] }, now());
   await createKeep(network, noor, amber.id, now());
   await createFollow(network, noor, sol.accountId, now());

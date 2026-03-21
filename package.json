@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Desktop-first prototype for a decentralized media platform built with plain TypeScript and CSS.",
+  "description": "Desktop-first decentralized media application built with plain TypeScript and CSS.",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "node server.mjs",

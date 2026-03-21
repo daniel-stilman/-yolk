@@ -47,6 +47,9 @@ export class AppService {
   constructor(options = {}) {
     this.baseDir = options.baseDir || path.join(os.tmpdir(), 'yolk-app-service')
     this.sampleMediaDir = options.sampleMediaDir || path.join(process.cwd(), 'sample media')
+    this.clientsDir = path.join(this.baseDir, 'clients')
+    this.demoDir = path.join(this.baseDir, 'demo')
+    this.demoAccountsFile = path.join(this.baseDir, 'demo-accounts.json')
     this.bootstrap = null
     this.demoRuntime = null
     this.demoAccounts = {}
@@ -62,15 +65,13 @@ export class AppService {
 
   async start() {
     await fs.mkdir(this.baseDir, { recursive: true })
+    await fs.mkdir(this.clientsDir, { recursive: true })
     this.knownAccounts = new Set()
     this.sessions = new Map()
     this.bootstrap = await createBootstrapNode()
-    await fs.rm(path.join(this.baseDir, 'clients'), { recursive: true, force: true })
-    await fs.rm(path.join(this.baseDir, 'demo'), { recursive: true, force: true })
-    await fs.rm(path.join(this.baseDir, 'demo-accounts.json'), { force: true })
     this.demoRuntime = await P2PRuntime.create({
       name: 'demo',
-      baseDir: path.join(this.baseDir, 'demo'),
+      baseDir: this.demoDir,
       bootstrap: [`127.0.0.1:${this.bootstrap.address.port}`]
     })
     await this.ensureDemoNetwork()
@@ -83,8 +84,7 @@ export class AppService {
   }
 
   async ensureDemoNetwork() {
-    const demoFile = path.join(this.baseDir, 'demo-accounts.json')
-    const existing = await fs.readFile(demoFile, 'utf8').then(JSON.parse).catch(() => null)
+    const existing = await fs.readFile(this.demoAccountsFile, 'utf8').then(JSON.parse).catch(() => null)
     if (existing?.sol && existing?.noor) {
       this.demoAccounts = existing
       this.knownAccounts.add(existing.sol)
@@ -182,27 +182,59 @@ export class AppService {
     this.demoAccounts = { sol: sol.accountId, noor: noor.accountId }
     this.knownAccounts.add(sol.accountId)
     this.knownAccounts.add(noor.accountId)
-    await fs.writeFile(demoFile, JSON.stringify(this.demoAccounts, null, 2))
+    await fs.writeFile(this.demoAccountsFile, JSON.stringify(this.demoAccounts, null, 2))
+  }
+
+  sessionFileFor(clientId) {
+    return path.join(this.clientsDir, clientId, 'session.json')
+  }
+
+  async readSessionState(clientId) {
+    const sessionFile = this.sessionFileFor(clientId)
+    const existing = await fs.readFile(sessionFile, 'utf8').then(JSON.parse).catch(() => null)
+    return existing
+      ? {
+          currentAccountId: existing.currentAccountId || null,
+          ui: {
+            ...uiDefaults(),
+            ...existing.ui,
+            collectionDraftChildRefs: Array.isArray(existing.ui?.collectionDraftChildRefs) ? existing.ui.collectionDraftChildRefs : [],
+            savedCollectionRefs: Array.isArray(existing.ui?.savedCollectionRefs) ? existing.ui.savedCollectionRefs : []
+          }
+        }
+      : null
+  }
+
+  async saveSession(clientId, session) {
+    const sessionFile = this.sessionFileFor(clientId)
+    await fs.mkdir(path.dirname(sessionFile), { recursive: true })
+    await fs.writeFile(sessionFile, JSON.stringify({
+      currentAccountId: session.currentAccountId || null,
+      ui: session.ui
+    }, null, 2))
   }
 
   async getSession(clientId) {
     if (this.sessions.has(clientId)) return this.sessions.get(clientId)
+    const persisted = await this.readSessionState(clientId)
     const runtime = await P2PRuntime.create({
       name: `client-${clientId}`,
-      baseDir: path.join(this.baseDir, 'clients', clientId),
+      baseDir: path.join(this.clientsDir, clientId),
       bootstrap: [`127.0.0.1:${this.bootstrap.address.port}`]
     })
     const accountIds = Object.keys(runtime.accounts)
     const session = {
       runtime,
-      ui: {
+      ui: persisted?.ui || {
         ...uiDefaults(),
         selectedProfileAccountId: accountIds[0] || null
       },
-      currentAccountId: accountIds[0] || null
+      currentAccountId: persisted?.currentAccountId || accountIds[0] || null
     }
+    if (!session.ui.selectedProfileAccountId) session.ui.selectedProfileAccountId = session.currentAccountId
     if (session.currentAccountId) this.knownAccounts.add(session.currentAccountId)
     this.sessions.set(clientId, session)
+    await this.saveSession(clientId, session)
     return session
   }
 
@@ -296,9 +328,8 @@ export class AppService {
     }
   }
 
-  async buildLibrary(runtime, accountId) {
+  async buildLibrary(runtime, accountId, savedCollectionRefs = []) {
     if (!accountId) return { keptCount: 0, keptTitles: [], keptMedia: [], items: [], collections: [] }
-    const session = [...this.sessions.values()].find(entry => entry.currentAccountId === accountId)
     const resolved = await runtime.resolveProfile(accountId)
     const keptMedia = []
     const items = []
@@ -329,7 +360,7 @@ export class AppService {
       })
     }
 
-    for (const collectionRef of session?.ui.savedCollectionRefs || []) {
+    for (const collectionRef of savedCollectionRefs) {
       if (seenCollectionRefs.has(collectionRef)) continue
       const summary = await this.resolveCollectionSummary(runtime, collectionRef).catch(() => null)
       if (!summary) continue
@@ -544,7 +575,7 @@ export class AppService {
       selectedProfile: await this.resolveProfileSummary(session.runtime, selectedAccountId),
       searchResults: [],
       feed: await this.buildFeed(session.runtime, currentAccountId),
-      library: await this.buildLibrary(session.runtime, currentAccountId),
+      library: await this.buildLibrary(session.runtime, currentAccountId, session.ui.savedCollectionRefs),
       network: { accounts: this.knownAccounts.size, media: 0, collections: 0, keeps: 0, follows: 0 },
       trust: { selectedAccountId, selectedHeadSeq: null, selectedProfileRef: null, resolvedViaDhtHead: true, verifiedProfile: Boolean(selectedAccountId) },
       suggestions: await this.buildSuggestions(session.runtime, currentAccountId),
@@ -568,6 +599,7 @@ export class AppService {
     session.ui.activeSection = 'discover'
     session.ui.flashMessage = ''
     await this.rememberAccount(account.accountId)
+    await this.saveSession(clientId, session)
     return account
   }
 
@@ -578,17 +610,20 @@ export class AppService {
     session.ui.selectedProfileAccountId = accountId
     session.ui.activeSection = 'profile'
     session.ui.flashMessage = ''
+    await this.saveSession(clientId, session)
     return true
   }
 
   async setSection(clientId, section) {
     const session = await this.getSession(clientId)
     session.ui.activeSection = section
+    await this.saveSession(clientId, session)
   }
 
   async dismissFlash(clientId) {
     const session = await this.getSession(clientId)
     session.ui.flashMessage = ''
+    await this.saveSession(clientId, session)
   }
 
   async uploadMedia(clientId, input) {
@@ -597,6 +632,7 @@ export class AppService {
     session.ui.collectionDraftChildRefs = [...new Set([...session.ui.collectionDraftChildRefs, result.mediaRef])]
     session.ui.activeSection = 'upload'
     session.ui.flashMessage = 'Added to draft.'
+    await this.saveSession(clientId, session)
     return result
   }
 
@@ -611,6 +647,7 @@ export class AppService {
     session.ui.selectedProfileAccountId = session.currentAccountId
     session.ui.activeSection = 'library'
     session.ui.flashMessage = 'Folder created.'
+    await this.saveSession(clientId, session)
     return result
   }
 
@@ -618,6 +655,7 @@ export class AppService {
     const session = await this.getSession(clientId)
     const result = await session.runtime.keepMedia(session.currentAccountId, mediaRef)
     session.ui.flashMessage = 'Saved.'
+    await this.saveSession(clientId, session)
     return result
   }
 
@@ -641,6 +679,7 @@ export class AppService {
     }
     session.ui.savedCollectionRefs = [...new Set([collectionRef, ...session.ui.savedCollectionRefs])]
     session.ui.flashMessage = refs.length ? 'Saved to library.' : 'Nothing to save.'
+    await this.saveSession(clientId, session)
     return { keptRefs: refs }
   }
 
@@ -649,6 +688,7 @@ export class AppService {
     await this.rememberAccount(accountId)
     const result = await session.runtime.publishFollow(session.currentAccountId, accountId)
     session.ui.flashMessage = 'Following.'
+    await this.saveSession(clientId, session)
     return result
   }
 
@@ -656,11 +696,13 @@ export class AppService {
     const session = await this.getSession(clientId)
     session.ui.collectionDraftChildRefs = [...new Set([...session.ui.collectionDraftChildRefs, mediaRef])]
     session.ui.flashMessage = 'Added to draft.'
+    await this.saveSession(clientId, session)
   }
 
   async removeDraftChild(clientId, mediaRef) {
     const session = await this.getSession(clientId)
     session.ui.collectionDraftChildRefs = session.ui.collectionDraftChildRefs.filter(ref => ref !== mediaRef)
+    await this.saveSession(clientId, session)
   }
 
   async moveDraftChild(clientId, mediaRef, direction) {
@@ -671,10 +713,12 @@ export class AppService {
     const next = session.ui.collectionDraftChildRefs.slice()
     ;[next[index], next[swapIndex]] = [next[swapIndex], next[index]]
     session.ui.collectionDraftChildRefs = next
+    await this.saveSession(clientId, session)
   }
 
   async resetDraft(clientId) {
     const session = await this.getSession(clientId)
     session.ui.collectionDraftChildRefs = []
+    await this.saveSession(clientId, session)
   }
 }

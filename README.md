@@ -1,6 +1,6 @@
 # Yolk
 
-Yolk is a desktop-first prototype for a decentralized media platform built with plain TypeScript, plain CSS, native DOM APIs, and ES modules. The current build is a vertical slice for identity, signed account state, immutable media, collections, keeps, follows, and profile/feed browsing.
+Yolk is a desktop-first decentralized media application built with plain TypeScript, plain CSS, native DOM APIs, and ES modules. The current build covers identity, signed account state, immutable media, collections, keeps, follows, and profile/feed browsing.
 
 The repo now also contains the first real peer-to-peer runtime slice in [runtime/p2p-runtime.mjs](/C:/Users/danie/yolk/runtime/p2p-runtime.mjs): mutable account heads are published through a real DHT, immutable profile/media objects are distributed as real torrents, and Keep semantics are exercised as actual download-and-seed operations between multiple peers.
 
@@ -19,7 +19,7 @@ The app follows these non-negotiable rules:
 
 ## First Build Scope
 
-This prototype currently demonstrates:
+This application currently demonstrates:
 
 - account creation with a generated local keypair
 - signed profile publishing
@@ -32,7 +32,7 @@ This prototype currently demonstrates:
 - profile browsing with verified username/display-name rendering
 - a seeded demo network so discovery works immediately
 
-The networking and peer-to-peer transport are intentionally simplified for this first build. The app uses a local mock store for:
+The networking and peer-to-peer transport are still simplified in parts of the app. The app uses a local mock store for:
 
 - mutable DHT-like account heads
 - signed public records
@@ -98,7 +98,7 @@ Profiles are signed records stored behind a mutable `AccountHead` pointer. The c
 
 Media metadata is signed and immutable. A new file or changed bytes produce a new media object.
 
-The prototype stores local blob refs in the mock network, but the record model is already split between:
+The app stores local blob refs in the mock network, but the record model is already split between:
 
 - content/blob refs
 - signed metadata objects
@@ -123,7 +123,7 @@ Collection authorship and media authorship are both preserved and visible.
 
 ## UI Areas
 
-The prototype includes:
+The application includes:
 
 - `Home / Feed`
 - `Discover`
