@@ -90,7 +90,7 @@ test('keep downloads the torrent payload and continues seeding locally', async (
   }
 })
 
-test('follow invite import roots discovery and search in the reachable follow graph', async () => {
+test('follow graph discovery and search stay scoped to the reachable follow graph', async () => {
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yolk-invite-graph-'))
   const sampleMediaDir = path.join(repoRoot, 'sample media')
   const service = await AppService.create({ baseDir, sampleMediaDir })
@@ -101,7 +101,7 @@ test('follow invite import roots discovery and search in the reachable follow gr
     const carolClient = 'carol-client'
     const danaClient = 'dana-client'
 
-    await service.createAccount(aliceClient, {
+    const alice = await service.createAccount(aliceClient, {
       username: 'alice',
       displayName: 'Alice Atlas',
       bio: 'Root peer'
@@ -166,8 +166,7 @@ test('follow invite import roots discovery and search in the reachable follow gr
     assert.deepEqual(snapshot.suggestions, [])
     assert.deepEqual(snapshot.feed, [])
 
-    const aliceInvite = (await service.buildSnapshot(aliceClient)).followInvite
-    await service.importFollowInvite(bobClient, aliceInvite)
+    await service.followAccount(bobClient, alice.accountId)
     snapshot = await service.buildSnapshot(bobClient)
     assert.equal(snapshot.network.accounts, 3)
     assert.ok(snapshot.feed.every(item => item.kind === 'post'))
@@ -187,6 +186,63 @@ test('follow invite import roots discovery and search in the reachable follow gr
   } finally {
     await service.destroy()
     await fs.rm(baseDir, { recursive: true, force: true })
+  }
+})
+
+test('follow invite rendezvous hints connect isolated app-service instances without a shared bootstrap', async () => {
+  const aliceBaseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yolk-rendezvous-alice-'))
+  const bobBaseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yolk-rendezvous-bob-'))
+  const sampleMediaDir = path.join(repoRoot, 'sample media')
+  const aliceService = await AppService.create({ baseDir: aliceBaseDir, sampleMediaDir })
+  const bobService = await AppService.create({ baseDir: bobBaseDir, sampleMediaDir })
+
+  try {
+    const aliceClient = 'alice-home'
+    const bobClient = 'bob-home'
+    const alice = await aliceService.createAccount(aliceClient, {
+      username: 'alice',
+      displayName: 'Alice Atlas',
+      bio: 'Home device'
+    })
+    await aliceService.publishStructuredUpload(aliceClient, {
+      packageKind: 'movie',
+      title: 'Harbor Window',
+      description: 'Release exposed through invite-carried rendezvous hints.',
+      rows: [
+        {
+          title: 'Harbor Window',
+          fileName: 'harbor-window.txt',
+          mediaType: 'text',
+          dataBase64: Buffer.from('harbor window payload', 'utf8').toString('base64')
+        }
+      ]
+    })
+
+    await bobService.createAccount(bobClient, {
+      username: 'bob',
+      displayName: 'Bob North',
+      bio: 'Separate device'
+    })
+    let bobSnapshot = await bobService.buildSnapshot(bobClient)
+    assert.deepEqual(bobSnapshot.feed, [])
+
+    const invite = (await aliceService.buildSnapshot(aliceClient)).followInvite
+    const invitePayload = JSON.parse(Buffer.from(invite.slice('yolk-follow:'.length), 'base64url').toString('utf8'))
+    assert.ok(Array.isArray(invitePayload.rendezvousHints))
+    assert.ok(invitePayload.rendezvousHints.some(hint => hint.host === '127.0.0.1'))
+
+    await bobService.importFollowInvite(bobClient, invite)
+    bobSnapshot = await bobService.buildSnapshot(bobClient)
+    assert.ok(bobSnapshot.feed.some(item => item.subjectTitle === 'Harbor Window'))
+
+    await bobService.openProfile(bobClient, alice.accountId)
+    bobSnapshot = await bobService.buildSnapshot(bobClient)
+    assert.equal(bobSnapshot.selectedProfile?.username, 'alice')
+  } finally {
+    await aliceService.destroy()
+    await bobService.destroy()
+    await fs.rm(aliceBaseDir, { recursive: true, force: true })
+    await fs.rm(bobBaseDir, { recursive: true, force: true })
   }
 })
 

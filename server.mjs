@@ -77,7 +77,10 @@ export async function createYolkServer(options = {}) {
   const service = await AppService.create({
     baseDir: options.baseDir || path.join(__dirname, '.yolk-runtime'),
     sampleMediaDir: options.sampleMediaDir || path.join(__dirname, 'sample media'),
-    seedDemo: options.seedDemo === true
+    seedDemo: options.seedDemo === true,
+    advertiseHosts: options.advertiseHosts,
+    includeLanHints: options.includeLanHints,
+    includeLoopbackHints: options.includeLoopbackHints
   });
   const server = createServer(async (req, res) => {
     const url = new URL(req.url || '/', 'http://127.0.0.1');

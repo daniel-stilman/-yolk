@@ -56,6 +56,40 @@ const PACKAGE_KIND_CONFIG = {
   graphic_novel: { collectionType: 'graphic-novel', rootLabel: 'Graphic Novels' }
 }
 const FOLLOW_INVITE_PREFIX = 'yolk-follow:'
+const transportDefaults = () => ({
+  dhtPort: 0,
+  peerHintsByAccountId: {}
+})
+
+function parseAdvertiseHosts(value) {
+  if (Array.isArray(value)) return value.map(item => String(item || '').trim()).filter(Boolean)
+  return String(value || '')
+    .split(/[,\s]+/)
+    .map(item => item.trim())
+    .filter(Boolean)
+}
+
+function normalizePeerHints(hints) {
+  if (!Array.isArray(hints)) return []
+  const seen = new Set()
+  const normalized = []
+  for (const hint of hints) {
+    const host = String(hint?.host || '').trim()
+    const port = Number(hint?.port || 0)
+    if (!host || !Number.isInteger(port) || port <= 0) continue
+    const key = `${host}:${port}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    normalized.push({
+      host,
+      port,
+      scope: String(hint?.scope || '').trim() || 'direct'
+    })
+  }
+  return normalized
+}
+
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 function normalizeLibraryPath(pathValue, fallback = []) {
   if (!Array.isArray(pathValue)) return [...fallback]
@@ -139,7 +173,10 @@ function parseFollowInviteToken(token) {
   if (!invite || invite.kind !== 'follow-invite' || invite.version !== 1) throw new Error('Invite format is not recognized.')
   if (!invite.accountId || !invite.signature) throw new Error('Invite is incomplete.')
   if (!verifyRecord(invite.accountId, invite)) throw new Error('Invite signature is invalid.')
-  return invite
+  return {
+    ...invite,
+    rendezvousHints: normalizePeerHints(invite.rendezvousHints)
+  }
 }
 
 export class AppService {
@@ -147,6 +184,9 @@ export class AppService {
     this.baseDir = options.baseDir || path.join(os.tmpdir(), 'yolk-app-service')
     this.sampleMediaDir = options.sampleMediaDir || path.join(process.cwd(), 'sample media')
     this.seedDemo = options.seedDemo === true
+    this.advertiseHosts = parseAdvertiseHosts(options.advertiseHosts || process.env.YOLK_ADVERTISE_HOSTS)
+    this.includeLanHints = options.includeLanHints !== false
+    this.includeLoopbackHints = options.includeLoopbackHints !== false
     this.clientsDir = path.join(this.baseDir, 'clients')
     this.demoDir = path.join(this.baseDir, 'demo')
     this.demoAccountsFile = path.join(this.baseDir, 'demo-accounts.json')
@@ -328,6 +368,14 @@ export class AppService {
     return existing
       ? {
           currentAccountId: existing.currentAccountId || null,
+          transport: {
+            ...transportDefaults(),
+            ...(existing.transport && typeof existing.transport === 'object' ? existing.transport : {}),
+            dhtPort: Number(existing.transport?.dhtPort || 0) || 0,
+            peerHintsByAccountId: existing.transport?.peerHintsByAccountId && typeof existing.transport.peerHintsByAccountId === 'object'
+              ? Object.fromEntries(Object.entries(existing.transport.peerHintsByAccountId).map(([accountId, hints]) => [accountId, normalizePeerHints(hints)]))
+              : {}
+          },
           ui: {
             ...uiDefaults(),
             ...existing.ui,
@@ -346,27 +394,74 @@ export class AppService {
     await fs.mkdir(path.dirname(sessionFile), { recursive: true })
     await fs.writeFile(sessionFile, JSON.stringify({
       currentAccountId: session.currentAccountId || null,
+      transport: session.transport || transportDefaults(),
       ui: session.ui
     }, null, 2))
   }
 
-  async getSession(clientId) {
-    if (this.sessions.has(clientId)) return this.sessions.get(clientId)
-    const persisted = await this.readSessionState(clientId)
-    const runtime = await P2PRuntime.create({
+  bootstrapEntriesForTransport(transport) {
+    const localBootstrap = this.bootstrap?.address?.port ? [`127.0.0.1:${this.bootstrap.address.port}`] : []
+    const peerBootstrap = Object.values(transport?.peerHintsByAccountId || {})
+      .flatMap(hints => normalizePeerHints(hints))
+      .map(hint => `${hint.host}:${hint.port}`)
+    return [...new Set([...localBootstrap, ...peerBootstrap])]
+  }
+
+  async createSessionRuntime(clientId, transport) {
+    const options = {
       name: `client-${clientId}`,
       baseDir: path.join(this.clientsDir, clientId),
-      bootstrap: [`127.0.0.1:${this.bootstrap.address.port}`]
-    })
+      bootstrap: this.bootstrapEntriesForTransport(transport),
+      dhtPort: transport?.dhtPort || 0
+    }
+    try {
+      return await P2PRuntime.create(options)
+    } catch (error) {
+      if (options.dhtPort && error?.code === 'EADDRINUSE') {
+        return P2PRuntime.create({
+          ...options,
+          dhtPort: 0
+        })
+      }
+      throw error
+    }
+  }
+
+  async restartSessionRuntime(clientId, session) {
+    const currentAccountId = session.currentAccountId
+    const ui = session.ui
+    if (session.runtime) await session.runtime.destroy()
+    session.runtime = await this.createSessionRuntime(clientId, session.transport)
+    session.currentAccountId = currentAccountId
+    session.ui = ui
+    const dhtAddress = session.runtime.getDhtAddress()
+    if (dhtAddress?.port) session.transport.dhtPort = dhtAddress.port
+    this.sessions.set(clientId, session)
+    await this.saveSession(clientId, session)
+    return session
+  }
+
+  async getSession(clientId) {
+    if (this.sessions.has(clientId)) {
+      const existing = this.sessions.get(clientId)
+      if (existing?.runtime?.client && existing?.runtime?.dht) return existing
+      return this.restartSessionRuntime(clientId, existing)
+    }
+    const persisted = await this.readSessionState(clientId)
+    const transport = persisted?.transport || transportDefaults()
+    const runtime = await this.createSessionRuntime(clientId, transport)
     const accountIds = Object.keys(runtime.accounts)
     const session = {
       runtime,
+      transport,
       ui: persisted?.ui || {
         ...uiDefaults(),
         selectedProfileAccountId: accountIds[0] || null
       },
       currentAccountId: persisted?.currentAccountId || accountIds[0] || null
     }
+    const dhtAddress = runtime.getDhtAddress()
+    if (dhtAddress?.port) session.transport.dhtPort = dhtAddress.port
     if (!session.ui.selectedProfileAccountId) session.ui.selectedProfileAccountId = session.currentAccountId
     if (session.currentAccountId) this.knownAccounts.add(session.currentAccountId)
     this.sessions.set(clientId, session)
@@ -376,6 +471,39 @@ export class AppService {
 
   async rememberAccount(accountId) {
     if (accountId) this.knownAccounts.add(accountId)
+  }
+
+  collectLocalRendezvousHints(session) {
+    const port = Number(session?.runtime?.getDhtAddress?.()?.port || session?.transport?.dhtPort || 0)
+    if (!port) return []
+    const hints = []
+
+    for (const host of this.advertiseHosts) {
+      hints.push({ host, port, scope: 'manual' })
+    }
+
+    if (this.includeLanHints) {
+      const interfaces = os.networkInterfaces()
+      for (const entries of Object.values(interfaces)) {
+        for (const entry of entries || []) {
+          if (!entry || entry.internal || entry.family !== 'IPv4') continue
+          hints.push({ host: entry.address, port, scope: 'lan' })
+        }
+      }
+    }
+
+    if (this.includeLoopbackHints) hints.push({ host: '127.0.0.1', port, scope: 'loopback' })
+    return normalizePeerHints(hints)
+  }
+
+  async resolveProfileWithRetry(runtime, accountId, attempts = 10, delayMs = 120) {
+    let lastResolved = null
+    for (let index = 0; index < attempts; index += 1) {
+      lastResolved = await runtime.resolveProfile(accountId).catch(() => null)
+      if (lastResolved) return lastResolved
+      if (index < attempts - 1) await wait(delayMs)
+    }
+    return lastResolved
   }
 
   readerFor(accountId, preferredRuntime) {
@@ -857,10 +985,10 @@ export class AppService {
     return shelf
   }
 
-  async buildFollowInvite(runtime, accountId) {
-    if (!accountId || !runtime?.accounts?.[accountId]) return ''
-    const account = runtime.accounts[accountId]
-    const resolved = await runtime.resolveProfile(accountId).catch(() => null)
+  async buildFollowInvite(session, accountId) {
+    if (!accountId || !session?.runtime?.accounts?.[accountId]) return ''
+    const account = session.runtime.accounts[accountId]
+    const resolved = await session.runtime.resolveProfile(accountId).catch(() => null)
     if (!resolved) return ''
     const invite = {
       version: 1,
@@ -868,7 +996,8 @@ export class AppService {
       accountId,
       username: resolved.profile.username,
       displayName: resolved.profile.displayName,
-      issuedAt: resolved.profile.updatedAt
+      issuedAt: resolved.profile.updatedAt,
+      rendezvousHints: this.collectLocalRendezvousHints(session)
     }
     return serializeFollowInvite({
       ...invite,
@@ -911,7 +1040,7 @@ export class AppService {
       } : null,
       activeSection: session.ui.activeSection,
       discoverQuery: session.ui.discoverQuery,
-      followInvite: await this.buildFollowInvite(session.runtime, currentAccountId),
+      followInvite: await this.buildFollowInvite(session, currentAccountId),
       selectedProfile,
       searchResults: session.ui.discoverQuery ? await this.searchKnownProfiles(session.runtime, currentAccountId, session.ui.discoverQuery) : [],
       feed,
@@ -1158,12 +1287,18 @@ export class AppService {
         await this.saveSession(clientId, session)
         return false
       }
+      if (invite.rendezvousHints.length) {
+        session.transport.peerHintsByAccountId[invite.accountId] = invite.rendezvousHints
+        await this.restartSessionRuntime(clientId, session)
+      }
       await this.rememberAccount(invite.accountId)
-      await session.runtime.resolveProfile(invite.accountId).catch(() => null)
       await session.runtime.publishFollow(session.currentAccountId, invite.accountId)
+      const reachable = await this.resolveProfileWithRetry(session.runtime, invite.accountId)
       session.ui.discoverQuery = ''
       session.ui.activeSection = 'discover'
-      session.ui.flashMessage = `Added @${invite.username} to your network.`
+      session.ui.flashMessage = reachable
+        ? `Added @${invite.username} to your network.`
+        : `Added @${invite.username}. Their device will appear when one of their shared addresses is reachable.`
       await this.saveSession(clientId, session)
       return {
         accountId: invite.accountId,

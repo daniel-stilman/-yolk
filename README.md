@@ -23,10 +23,11 @@ The live product path is invite-first:
 
 1. There is no central directory and no assumption of one mega-network.
 2. A person enters a network by importing a follow invite from someone they trust.
-3. Search and discovery are scoped to the reachable follow graph rooted in that trust path.
-4. Different clusters may overlap, or may stay disconnected forever.
-5. Follow has real cost: it expands the people and releases that shape discovery.
-6. Keep has real cost: it stores the media locally with seeding intent.
+3. Follow invites now carry signed rendezvous hints for the sharer's current device.
+4. Search and discovery are scoped to the reachable follow graph rooted in that trust path.
+5. Different clusters may overlap, or may stay disconnected forever.
+6. Follow has real cost: it expands the people and releases that shape discovery.
+7. Keep has real cost: it stores the media locally with seeding intent.
 
 ## First Build Scope
 
@@ -36,6 +37,7 @@ This application currently demonstrates:
 - signed profile publishing
 - profile resolution by account id through a mutable account head
 - follow-invite export/import as the default way to join another person's network
+- invite-carried rendezvous hints plus a persisted peerbook so imported follows can reconnect after restart
 - network-scoped account discovery and search through the reachable follow graph
 - immutable media publishing for image, audio, video, and text metadata
 - original and curated collections
@@ -60,10 +62,12 @@ The default product surface should be shaped around one job first: getting peopl
 The networking and peer-to-peer transport are still simplified in parts of the app. The live browser shell now runs through the runtime-backed app service, but it still relies on:
 
 - a local bootstrap DHT node per app-service instance
-- graph traversal from imported follow edges instead of real home-device rendezvous
+- invite-carried loopback/LAN/manual device hints rather than full NAT traversal or relay support
 - local/dev transport assumptions rather than hardened real-world reachability between ordinary home devices
 
 This keeps the identity and authorship architecture clean while the invite-first transport and reachability model are still being built out.
+
+For manual host advertisement, set `YOLK_ADVERTISE_HOSTS` to a comma-separated list of reachable hosts or IPs before starting the server. Those hosts are signed into follow invites alongside the local device's detected LAN addresses.
 
 ## Stack
 
@@ -141,6 +145,12 @@ Follow means:
 - trust this person enough to let their network influence discovery
 - expand the graph that search and discover can traverse from your account
 
+Rendezvous currently means:
+
+- import a follow invite
+- persist the shared device hints in the local peerbook
+- restart the local runtime against those hints so the other device can act as the first reachable peer
+
 ### 5. Packages
 
 Packages are the primary publishing surface. They can reference:
@@ -190,6 +200,7 @@ For deterministic browser regression coverage, the browser sanity harness explic
 - mutable DHT account heads resolve the latest signed profile
 - immutable media payloads move over a real torrent swarm
 - Keep means download + continue seeding
+- isolated app-service instances can rendezvous through invite-carried device hints without sharing one bootstrap node
 
 When behavior changes:
 
@@ -227,6 +238,6 @@ Keep this synchronized with `tests/sanity/yolk_sanity_input.json` and `tests/san
 ## Notes For The Next Build
 
 - add device-key delegation on top of the root account key
-- replace the local bootstrap/dev reachability assumptions with a real home-device introduction and rendezvous strategy
+- replace the current invite-hint approach with stronger home-device reachability, NAT traversal, or relay strategy where needed
 - expose profile editing and richer upload/profile views on top of the runtime-backed shell
 - expand collection layout rules without breaking signed authorship boundaries

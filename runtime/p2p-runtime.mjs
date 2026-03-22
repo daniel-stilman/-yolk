@@ -183,6 +183,7 @@ export class P2PRuntime {
     this.headsIndexFile = path.join(this.baseDir, 'heads.json')
     this.headsIndex = {}
     this.dht = null
+    this.dhtAddress = null
     this.client = null
   }
 
@@ -204,6 +205,7 @@ export class P2PRuntime {
     this.headsIndex = await readJson(this.headsIndexFile, {}) || {}
     this.dht = new DHT({ bootstrap: this.bootstrap, verify: DEFAULT_DHT_VERIFY })
     await waitForListen(this.dht, this.dhtPort)
+    this.dhtAddress = this.dht.address()
     this.client = new WebTorrent({
       tracker: false,
       lsd: false,
@@ -218,8 +220,29 @@ export class P2PRuntime {
   }
 
   async destroy() {
-    if (this.client) await new Promise(resolve => this.client.destroy(resolve))
-    if (this.dht) await new Promise(resolve => this.dht.destroy(resolve))
+    const client = this.client
+    const dht = this.dht
+    this.client = null
+    this.dht = null
+    this.dhtAddress = null
+    if (client) {
+      await new Promise((resolve, reject) => {
+        try {
+          client.destroy(error => {
+            if (error && !String(error.message || error).includes('already destroyed')) reject(error)
+            else resolve()
+          })
+        } catch (error) {
+          if (String(error?.message || error).includes('already destroyed')) resolve()
+          else reject(error)
+        }
+      })
+    }
+    if (dht) await new Promise(resolve => dht.destroy(resolve))
+  }
+
+  getDhtAddress() {
+    return this.dhtAddress ? { ...this.dhtAddress } : null
   }
 
   async saveAccounts() {
