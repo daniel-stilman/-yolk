@@ -90,38 +90,100 @@ test('keep downloads the torrent payload and continues seeding locally', async (
   }
 })
 
-test('app service discovery snapshot exposes truthful network, trust, search, and post-only discover media', async () => {
-  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yolk-discovery-'))
-  const clientId = 'discovery-client'
+test('follow invite import roots discovery and search in the reachable follow graph', async () => {
+  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yolk-invite-graph-'))
   const sampleMediaDir = path.join(repoRoot, 'sample media')
   const service = await AppService.create({ baseDir, sampleMediaDir })
 
   try {
-    await service.createAccount(clientId, {
+    const aliceClient = 'alice-client'
+    const bobClient = 'bob-client'
+    const carolClient = 'carol-client'
+    const danaClient = 'dana-client'
+
+    await service.createAccount(aliceClient, {
       username: 'alice',
       displayName: 'Alice Atlas',
+      bio: 'Root peer'
+    })
+    await service.publishStructuredUpload(aliceClient, {
+      packageKind: 'album',
+      title: 'Dock Signals',
+      description: 'Alice release for invite-rooted discovery.',
+      rows: [
+        {
+          title: 'Dock Signals',
+          fileName: 'dock-signals.txt',
+          mediaType: 'text',
+          dataBase64: Buffer.from('dock signals payload', 'utf8').toString('base64')
+        }
+      ]
+    })
+
+    const carol = await service.createAccount(carolClient, {
+      username: 'carol',
+      displayName: 'Carol Vale',
+      bio: 'Second-degree discovery'
+    })
+    await service.publishStructuredUpload(carolClient, {
+      packageKind: 'movie',
+      title: 'Night Window',
+      description: 'Carol release for transitive discovery.',
+      rows: [
+        {
+          title: 'Night Window',
+          fileName: 'night-window.txt',
+          mediaType: 'text',
+          dataBase64: Buffer.from('night window payload', 'utf8').toString('base64')
+        }
+      ]
+    })
+    await service.followAccount(aliceClient, carol.accountId)
+
+    const dana = await service.createAccount(danaClient, {
+      username: 'dana',
+      displayName: 'Dana North',
+      bio: 'Disconnected account'
+    })
+
+    await service.createAccount(bobClient, {
+      username: 'bob',
+      displayName: 'Bob Atlas',
       bio: 'Collector'
     })
 
-    let snapshot = await service.buildSnapshot(clientId)
-    assert.equal(snapshot.network.accounts, 3)
-    assert.equal(snapshot.network.media, 4)
-    assert.equal(snapshot.network.collections, 3)
+    let snapshot = await service.buildSnapshot(bobClient)
+    assert.equal(snapshot.network.accounts, 1)
+    assert.equal(snapshot.network.media, 0)
+    assert.equal(snapshot.network.collections, 0)
     assert.equal(snapshot.network.keeps, 0)
-    assert.equal(snapshot.network.follows, 2)
+    assert.equal(snapshot.network.follows, 0)
     assert.equal(snapshot.trust.verifiedProfile, true)
     assert.equal(snapshot.trust.resolvedViaDhtHead, false)
     assert.ok(typeof snapshot.trust.selectedHeadSeq === 'number')
     assert.match(snapshot.trust.selectedProfileRef || '', /^magnet:\?xt=urn:btih:/)
-    assert.ok(snapshot.suggestions.some(item => item.username === 'sol'))
-    assert.ok(snapshot.feed.every(item => item.kind === 'post'))
-    assert.ok(snapshot.feed.some(item => item.kind === 'post' && item.subjectTitle === 'Night Transit'))
-    assert.ok(snapshot.feed.some(item => item.kind === 'post' && item.subjectTitle === 'Harbor Studies'))
+    assert.ok(snapshot.followInvite.startsWith('yolk-follow:'))
+    assert.deepEqual(snapshot.suggestions, [])
+    assert.deepEqual(snapshot.feed, [])
 
-    await service.searchProfiles(clientId, 'noor')
-    snapshot = await service.buildSnapshot(clientId)
-    assert.equal(snapshot.discoverQuery, 'noor')
-    assert.deepEqual(snapshot.searchResults.map(item => item.username), ['noor'])
+    const aliceInvite = (await service.buildSnapshot(aliceClient)).followInvite
+    await service.importFollowInvite(bobClient, aliceInvite)
+    snapshot = await service.buildSnapshot(bobClient)
+    assert.equal(snapshot.network.accounts, 3)
+    assert.ok(snapshot.feed.every(item => item.kind === 'post'))
+    assert.ok(snapshot.feed.some(item => item.subjectTitle === 'Dock Signals'))
+    assert.ok(snapshot.feed.some(item => item.subjectTitle === 'Night Window'))
+    assert.ok(snapshot.suggestions.some(item => item.username === 'carol'))
+
+    await service.searchProfiles(bobClient, 'carol')
+    snapshot = await service.buildSnapshot(bobClient)
+    assert.equal(snapshot.discoverQuery, 'carol')
+    assert.deepEqual(snapshot.searchResults.map(item => item.username), ['carol'])
+
+    await service.searchProfiles(bobClient, dana.accountId)
+    snapshot = await service.buildSnapshot(bobClient)
+    assert.equal(snapshot.discoverQuery, dana.accountId)
+    assert.deepEqual(snapshot.searchResults, [])
   } finally {
     await service.destroy()
     await fs.rm(baseDir, { recursive: true, force: true })
@@ -188,7 +250,7 @@ test('keeping a collection saves nested collection packages and media recursivel
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yolk-collection-keep-'))
   const clientId = 'collection-keeper'
   const sampleMediaDir = path.join(repoRoot, 'sample media')
-  const service = await AppService.create({ baseDir, sampleMediaDir })
+  const service = await AppService.create({ baseDir, sampleMediaDir, seedDemo: true })
 
   try {
     const noorId = service.demoAccounts.noor
@@ -238,7 +300,7 @@ test('unkeeping a saved collection removes its package from the library', async 
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yolk-collection-unkeep-'))
   const clientId = 'collection-unkeeper'
   const sampleMediaDir = path.join(repoRoot, 'sample media')
-  const service = await AppService.create({ baseDir, sampleMediaDir })
+  const service = await AppService.create({ baseDir, sampleMediaDir, seedDemo: true })
 
   try {
     await service.createAccount(clientId, {
@@ -328,7 +390,7 @@ test('app service persists session state and saved library collections across re
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yolk-app-persist-'))
   const clientId = 'persisted-client'
   const sampleMediaDir = path.join(repoRoot, 'sample media')
-  let service = await AppService.create({ baseDir, sampleMediaDir })
+  let service = await AppService.create({ baseDir, sampleMediaDir, seedDemo: true })
 
   try {
     await service.createAccount(clientId, {
@@ -347,7 +409,7 @@ test('app service persists session state and saved library collections across re
     assert.ok(beforeRestart.library.collections.some(item => item.title === 'Night Transit'))
 
     await service.destroy()
-    service = await AppService.create({ baseDir, sampleMediaDir })
+    service = await AppService.create({ baseDir, sampleMediaDir, seedDemo: true })
 
     const afterRestart = await service.buildSnapshot(clientId)
     assert.equal(afterRestart.currentAccount?.username, 'alice')

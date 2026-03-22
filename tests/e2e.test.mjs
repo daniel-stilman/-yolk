@@ -47,7 +47,8 @@ async function startServer() {
   const instance = await createYolkServer({
     port: 0,
     baseDir: path.join(repoRoot, '.tmp-e2e-runtime'),
-    sampleMediaDir: path.join(repoRoot, 'sample media')
+    sampleMediaDir: path.join(repoRoot, 'sample media'),
+    seedDemo: true
   });
   const baseUrl = instance.url;
   try {

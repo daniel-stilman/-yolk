@@ -173,6 +173,7 @@ export type AppSnapshot = {
   currentAccount: { accountId: string; username: string; displayName: string } | null;
   activeSection: SectionName;
   discoverQuery: string;
+  followInvite: string;
   selectedProfile: ProfileSummary | null;
   searchResults: SearchResult[];
   feed: FeedItem[];
@@ -772,6 +773,7 @@ export function createAppController(storage: StorageLike, options?: { now?: () =
         currentAccount: current ? { accountId: current.accountId, username: current.username, displayName: current.displayName } : null,
         activeSection: local.activeSection,
         discoverQuery: "",
+        followInvite: "",
         selectedProfile: selected,
         searchResults: [],
         feed: await buildFeed(network, local.currentAccountId),
@@ -863,6 +865,32 @@ function renderHeaderSearchResultCard(item: SearchResult, currentAccountId: stri
       ${canFollow ? `<button class="button-primary" type="button" data-follow-account="${escapeHtml(item.accountId)}">Follow</button>` : ""}
     </div>
   </article>`;
+}
+
+function renderNetworkSheet(snapshot: AppSnapshot) {
+  const suggestions = snapshot.suggestions.length
+    ? `<div class="network-suggestion-block"><div class="section-copy">Beyond your direct follows</div><div class="simple-list">${snapshot.suggestions.map(item => renderDiscoverProfileCard(item, snapshot.currentAccount?.accountId || null)).join("")}</div></div>`
+    : `<div class="empty-state empty-state--tight discover-empty">Import an invite or follow someone to widen discovery beyond your direct network.</div>`;
+  return `<div class="sheet people-sheet network-sheet">
+    ${blockTitle("Network", "Share your invite so someone can follow you, or import an invite from someone you trust.")}
+    <div class="network-invite-grid">
+      <div class="network-invite-card">
+        <label class="network-invite-label" for="follow-invite-export">Your follow invite</label>
+        <textarea id="follow-invite-export" class="network-invite-token" readonly>${escapeHtml(snapshot.followInvite || "")}</textarea>
+        <div class="button-row">
+          <button class="button-secondary" type="button" data-copy-follow-invite="${escapeHtml(snapshot.followInvite || "")}" ${snapshot.followInvite ? "" : "disabled"}>Copy invite</button>
+        </div>
+      </div>
+      <form id="follow-invite-form" class="form-grid form-grid--stack network-invite-form">
+        <div class="field">
+          <label for="follow-invite-input">Import a follow invite</label>
+          <textarea id="follow-invite-input" name="inviteToken" placeholder="Paste an invite from someone you trust" required></textarea>
+        </div>
+        <div class="button-row"><button class="button-primary" type="submit">Add to network</button></div>
+      </form>
+    </div>
+    ${suggestions}
+  </div>`;
 }
 
 function renderCollectionPreviewItem(
@@ -1225,10 +1253,10 @@ function renderSection(snapshot: AppSnapshot, state: { network: NetworkStore; lo
     const discoverPosts = snapshot.feed.filter(item => item.kind === "post" && item.post);
     return `<section class="section-block section-block--discover">
       <div class="sheet feed-sheet">
-        ${blockTitle("Discover", "New media packages from creators you follow.")}
-        ${discoverPosts.length ? `<div class="activity-stack">${discoverPosts.map(item => renderFeedPostCard(item, state.network, downloadedMediaRefs)).join("")}</div>` : `<div class="empty-state empty-state--quiet"></div>`}
+        ${blockTitle("Discover", "New media packages moving through your follow graph.")}
+        ${discoverPosts.length ? `<div class="activity-stack">${discoverPosts.map(item => renderFeedPostCard(item, state.network, downloadedMediaRefs)).join("")}</div>` : `<div class="empty-state empty-state--tight discover-empty">Your network is quiet. Import a follow invite to start discovery.</div>`}
       </div>
-      <div class="sheet people-sheet">${blockTitle("People To Follow", "Find more creators when you want new additions to your library.")}${snapshot.suggestions.length ? `<div class="simple-list">${snapshot.suggestions.map(item => renderDiscoverProfileCard(item, snapshot.currentAccount?.accountId || null)).join("")}</div>` : `<div class="empty-state empty-state--tight discover-empty">No suggestions yet.</div>`}</div>
+      ${renderNetworkSheet(snapshot)}
     </section>`;
   }
   if (activeSection === "library") {
@@ -1292,13 +1320,13 @@ function renderHeaderSearchPanel(snapshot: AppSnapshot) {
     ? (
         snapshot.searchResults.length
           ? `<div class="header-search-results simple-list" data-search-results="true">${snapshot.searchResults.map(item => renderHeaderSearchResultCard(item, snapshot.currentAccount?.accountId || null)).join("")}</div>`
-          : `<div class="header-search-empty" data-search-results="true">No users matched that search.</div>`
+          : `<div class="header-search-empty" data-search-results="true">No one in your network matched that search.</div>`
       )
     : "";
   return `<div class="header-search-panel">
     <form id="header-search-form" class="header-search-inline" role="search">
-      <input id="header-search-query" class="header-search-input" name="query" value="${escapeHtml(snapshot.discoverQuery)}" placeholder="Search for a user" autocomplete="off">
-      <button class="button-secondary" type="submit">Go</button>
+      <input id="header-search-query" class="header-search-input" name="query" value="${escapeHtml(snapshot.discoverQuery)}" placeholder="Search your network" autocomplete="off">
+      <button class="button-secondary" type="submit">Search</button>
     </form>
     ${results}
   </div>`;
@@ -1441,6 +1469,7 @@ function createApiController(storage: StorageLike) {
       return postAction("searchProfiles", { query });
     },
     async clearSearch() { return postAction("clearSearch"); },
+    async importFollowInvite(token: string) { return postAction("importFollowInvite", { token }); },
     async followAccount(accountId: string) { return postAction("followAccount", { accountId }); },
     async keepMedia(mediaRef: string) { return postAction("keepMedia", { mediaRef }); },
     async keepCollection(collectionRef: string) { return postAction("keepCollection", { collectionRef }); },
@@ -1583,7 +1612,7 @@ export async function startApp(root: HTMLElement, storage: StorageLike = window.
   let dragState: { ref: string; offsetX: number; offsetY: number } | null = null;
   let uploadDragRowId: string | null = null;
   root.addEventListener("click", async event => {
-    const target = (event.target as HTMLElement)?.closest?.("[data-nav],[data-toggle-search],[data-open-compose],[data-open-media-modal],[data-open-library-path],[data-open-library-root],[data-close-overlay],[data-close-collection],[data-dismiss-flash],[data-open-profile],[data-open-collection],[data-follow-account],[data-keep-media],[data-keep-collection],[data-unkeep-collection],[data-add-draft-child],[data-remove-draft-child],[data-move-draft-child],[data-reset-draft],[data-remove-upload-row]") as HTMLElement | null;
+    const target = (event.target as HTMLElement)?.closest?.("[data-nav],[data-toggle-search],[data-copy-follow-invite],[data-open-compose],[data-open-media-modal],[data-open-library-path],[data-open-library-root],[data-close-overlay],[data-close-collection],[data-dismiss-flash],[data-open-profile],[data-open-collection],[data-follow-account],[data-keep-media],[data-keep-collection],[data-unkeep-collection],[data-add-draft-child],[data-remove-draft-child],[data-move-draft-child],[data-reset-draft],[data-remove-upload-row]") as HTMLElement | null;
     if (!target) return;
     if (target.tagName === "A") event.preventDefault();
     let handled = true;
@@ -1592,6 +1621,27 @@ export async function startApp(root: HTMLElement, storage: StorageLike = window.
         (controller as any).closeSearch?.();
         await (controller as any).clearSearch?.();
       } else (controller as any).toggleSearch?.();
+    }
+    else if (target.dataset.copyFollowInvite) {
+      const token = target.dataset.copyFollowInvite;
+      try {
+        if (token && navigator.clipboard?.writeText) await navigator.clipboard.writeText(token);
+        else {
+          const field = root.querySelector('#follow-invite-export');
+          if (field instanceof HTMLTextAreaElement) {
+            field.focus();
+            field.select();
+            document.execCommand?.('copy');
+          }
+        }
+        target.textContent = 'Copied';
+        globalThis.setTimeout(() => {
+          if (target.isConnected) target.textContent = 'Copy invite';
+        }, 1200);
+      } catch (error) {
+        console.error(error);
+      }
+      handled = false;
     }
     else if (target.dataset.nav === "profile") {
       const currentAccountId = controller.getState().local.currentAccountId;
@@ -1740,6 +1790,9 @@ export async function startApp(root: HTMLElement, storage: StorageLike = window.
     } else if (form.id === "header-search-form") {
       const data = new FormData(form);
       await controller.search(String(data.get("query") || ""));
+    } else if (form.id === "follow-invite-form") {
+      const data = new FormData(form);
+      await (controller as any).importFollowInvite?.(String(data.get("inviteToken") || ""));
     } else if (form.id === "upload-form") {
       await (controller as any).publishStructuredUpload?.();
     }

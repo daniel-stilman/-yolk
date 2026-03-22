@@ -40,7 +40,7 @@ function stripSignature(value) {
   return copy
 }
 
-function signRecord(secretKeyHex, record) {
+export function signRecord(secretKeyHex, record) {
   const payload = Buffer.from(stableStringify(stripSignature(record)))
   const signature = nacl.sign.detached(new Uint8Array(payload), fromHex(secretKeyHex))
   return Buffer.from(signature).toString('base64')

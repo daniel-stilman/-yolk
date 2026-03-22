@@ -347,6 +347,46 @@ a {
   gap: 18px;
 }
 
+.network-sheet {
+  align-content: start;
+}
+
+.network-invite-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.network-invite-card,
+.network-suggestion-block {
+  display: grid;
+  gap: 12px;
+}
+
+.network-invite-label,
+.network-suggestion-block .section-copy {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-family: "Cascadia Code", "Consolas", monospace;
+}
+
+.network-invite-token {
+  width: 100%;
+  min-height: 156px;
+  padding: 12px 14px;
+  border: 2px solid #ffffff;
+  background: #0012c4;
+  color: var(--text);
+  font-family: "Lucida Console", "Courier New", monospace;
+  resize: none;
+}
+
+.network-invite-form textarea {
+  min-height: 156px;
+}
+
 .composer-layout--rows,
 .profile-layout--rows {
   display: grid;
@@ -1271,6 +1311,7 @@ a {
   }
 
   .form-grid.cols-2,
+  .network-invite-grid,
   .post-child-grid,
   .saved-grid {
     grid-template-columns: 1fr;

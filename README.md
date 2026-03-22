@@ -1,6 +1,6 @@
 # Yolk
 
-Yolk is a desktop-first decentralized media application built with plain TypeScript, plain CSS, native DOM APIs, and ES modules. The current build covers identity, signed account state, immutable media, collections, keeps, follows, and profile/feed browsing.
+Yolk is a desktop-first decentralized media application built with plain TypeScript, plain CSS, native DOM APIs, and ES modules. The current build covers identity, signed account state, immutable media, collections, keeps, follows, follow invites, and graph-scoped profile/feed browsing.
 
 The repo now also contains the first real peer-to-peer runtime slice in [runtime/p2p-runtime.mjs](/C:/Users/danie/yolk/runtime/p2p-runtime.mjs): mutable account heads are published through a real DHT, immutable profile/media objects are distributed as real torrents, and Keep semantics are exercised as actual download-and-seed operations between multiple peers.
 
@@ -17,6 +17,17 @@ The app follows these non-negotiable rules:
 7. Curation never overwrites original authorship.
 8. A Keep is the signed download action with seeding intent.
 
+## Network Model
+
+The live product path is invite-first:
+
+1. There is no central directory and no assumption of one mega-network.
+2. A person enters a network by importing a follow invite from someone they trust.
+3. Search and discovery are scoped to the reachable follow graph rooted in that trust path.
+4. Different clusters may overlap, or may stay disconnected forever.
+5. Follow has real cost: it expands the people and releases that shape discovery.
+6. Keep has real cost: it stores the media locally with seeding intent.
+
 ## First Build Scope
 
 This application currently demonstrates:
@@ -24,14 +35,14 @@ This application currently demonstrates:
 - account creation with a generated local keypair
 - signed profile publishing
 - profile resolution by account id through a mutable account head
-- account discovery and search by verified username or account id
+- follow-invite export/import as the default way to join another person's network
+- network-scoped account discovery and search through the reachable follow graph
 - immutable media publishing for image, audio, video, and text metadata
 - original and curated collections
 - follow records
 - keep records
 - a Discover queue composed from followed accounts' media posts
 - profile browsing with verified username/display-name rendering
-- a seeded demo network so discovery works immediately
 
 ## Product UX Guardrails
 
@@ -49,10 +60,10 @@ The default product surface should be shaped around one job first: getting peopl
 The networking and peer-to-peer transport are still simplified in parts of the app. The live browser shell now runs through the runtime-backed app service, but it still relies on:
 
 - a local bootstrap DHT node per app-service instance
-- a seeded demo network so discovery works immediately
-- a known-account graph for search and suggestions instead of a decentralized global index
+- graph traversal from imported follow edges instead of real home-device rendezvous
+- local/dev transport assumptions rather than hardened real-world reachability between ordinary home devices
 
-This keeps the identity and authorship architecture clean while the runtime hardening and wider discovery model are still being built out.
+This keeps the identity and authorship architecture clean while the invite-first transport and reachability model are still being built out.
 
 ## Stack
 
@@ -125,6 +136,11 @@ Keep means:
 - download into the local library
 - mark as intended to seed
 
+Follow means:
+
+- trust this person enough to let their network influence discovery
+- expand the graph that search and discover can traverse from your account
+
 ### 5. Packages
 
 Packages are the primary publishing surface. They can reference:
@@ -167,6 +183,8 @@ The sanity fixture pair is authoritative:
 
 The end-to-end harness starts `server.mjs`, opens the real app bundle in headless Edge through `playwright-core`, drives the actual DOM, and compares the rendered output against the curated expected snapshot. This is the baseline "full run of the program" check for onboarding, discovery, follows, downloads, structured uploads, collections, and feed rendering.
 
+For deterministic browser regression coverage, the browser sanity harness explicitly runs with `seedDemo: true`. The live app server default is now the invite-first, no-demo path.
+
 `tests/network.test.mjs` is the new non-UI proof layer for the actual transport. It launches multiple local peers against a bootstrap DHT node and verifies:
 
 - mutable DHT account heads resolve the latest signed profile
@@ -188,7 +206,7 @@ Keep this synchronized with `tests/sanity/yolk_sanity_input.json` and `tests/san
 - `profile_opens_from_discovery`
   Opens a collection from Discover and verifies that the collection overlay resolves from the live followed-network feed.
 - `discover_search_opens_profile`
-  Expands the header Search drawer inline from the nav, searches for a user, then opens the matching profile through the runtime-backed account lookup.
+  Expands the header Search drawer inline from the nav, searches the reachable network graph for a user, then opens the matching profile through the runtime-backed account lookup.
 - `followed_posts_visible_in_feed`
   The followed network resolves into a post-only Discover queue and surfaces media packages from both directly followed and transitively discovered accounts.
 - `download_media_flows_into_library`
@@ -209,6 +227,6 @@ Keep this synchronized with `tests/sanity/yolk_sanity_input.json` and `tests/san
 ## Notes For The Next Build
 
 - add device-key delegation on top of the root account key
-- widen discovery beyond the current known-account graph and local bootstrap assumptions
+- replace the local bootstrap/dev reachability assumptions with a real home-device introduction and rendezvous strategy
 - expose profile editing and richer upload/profile views on top of the runtime-backed shell
 - expand collection layout rules without breaking signed authorship boundaries

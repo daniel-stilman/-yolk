@@ -50,6 +50,7 @@ const handleAction = async (service, payload) => {
   if (payload.type === 'openProfile') return service.openProfile(clientId, payload.accountId);
   if (payload.type === 'searchProfiles') return service.searchProfiles(clientId, payload.query);
   if (payload.type === 'clearSearch') return service.clearSearch(clientId);
+  if (payload.type === 'importFollowInvite') return service.importFollowInvite(clientId, payload.token);
   if (payload.type === 'setSection') return service.setSection(clientId, payload.section);
   if (payload.type === 'dismissFlash') return service.dismissFlash(clientId);
   if (payload.type === 'uploadMedia') {
@@ -75,7 +76,8 @@ export async function createYolkServer(options = {}) {
   const listenPort = Number(options.port ?? process.env.PORT ?? 4173);
   const service = await AppService.create({
     baseDir: options.baseDir || path.join(__dirname, '.yolk-runtime'),
-    sampleMediaDir: options.sampleMediaDir || path.join(__dirname, 'sample media')
+    sampleMediaDir: options.sampleMediaDir || path.join(__dirname, 'sample media'),
+    seedDemo: options.seedDemo === true
   });
   const server = createServer(async (req, res) => {
     const url = new URL(req.url || '/', 'http://127.0.0.1');

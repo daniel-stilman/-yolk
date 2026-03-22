@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { createBootstrapNode, P2PRuntime } from './p2p-runtime.mjs'
+import { createBootstrapNode, P2PRuntime, signRecord, stableStringify, verifyRecord } from './p2p-runtime.mjs'
 
 const uiDefaults = () => ({
   activeSection: 'discover',
@@ -55,6 +55,7 @@ const PACKAGE_KIND_CONFIG = {
   art: { collectionType: 'gallery', rootLabel: 'Art' },
   graphic_novel: { collectionType: 'graphic-novel', rootLabel: 'Graphic Novels' }
 }
+const FOLLOW_INVITE_PREFIX = 'yolk-follow:'
 
 function normalizeLibraryPath(pathValue, fallback = []) {
   if (!Array.isArray(pathValue)) return [...fallback]
@@ -121,10 +122,31 @@ function canonicalPackageFromInput(input) {
   }
 }
 
+function serializeFollowInvite(invite) {
+  return `${FOLLOW_INVITE_PREFIX}${Buffer.from(stableStringify(invite)).toString('base64url')}`
+}
+
+function parseFollowInviteToken(token) {
+  const trimmed = String(token || '').trim()
+  if (!trimmed) throw new Error('Invite is required.')
+  if (!trimmed.startsWith(FOLLOW_INVITE_PREFIX)) throw new Error('Invite must start with yolk-follow:.')
+  let invite = null
+  try {
+    invite = JSON.parse(Buffer.from(trimmed.slice(FOLLOW_INVITE_PREFIX.length), 'base64url').toString('utf8'))
+  } catch {
+    throw new Error('Invite could not be decoded.')
+  }
+  if (!invite || invite.kind !== 'follow-invite' || invite.version !== 1) throw new Error('Invite format is not recognized.')
+  if (!invite.accountId || !invite.signature) throw new Error('Invite is incomplete.')
+  if (!verifyRecord(invite.accountId, invite)) throw new Error('Invite signature is invalid.')
+  return invite
+}
+
 export class AppService {
   constructor(options = {}) {
     this.baseDir = options.baseDir || path.join(os.tmpdir(), 'yolk-app-service')
     this.sampleMediaDir = options.sampleMediaDir || path.join(process.cwd(), 'sample media')
+    this.seedDemo = options.seedDemo === true
     this.clientsDir = path.join(this.baseDir, 'clients')
     this.demoDir = path.join(this.baseDir, 'demo')
     this.demoAccountsFile = path.join(this.baseDir, 'demo-accounts.json')
@@ -147,12 +169,15 @@ export class AppService {
     this.knownAccounts = new Set()
     this.sessions = new Map()
     this.bootstrap = await createBootstrapNode()
-    this.demoRuntime = await P2PRuntime.create({
-      name: 'demo',
-      baseDir: this.demoDir,
-      bootstrap: [`127.0.0.1:${this.bootstrap.address.port}`]
-    })
-    await this.ensureDemoNetwork()
+    this.demoAccounts = {}
+    if (this.seedDemo) {
+      this.demoRuntime = await P2PRuntime.create({
+        name: 'demo',
+        baseDir: this.demoDir,
+        bootstrap: [`127.0.0.1:${this.bootstrap.address.port}`]
+      })
+      await this.ensureDemoNetwork()
+    }
   }
 
   async destroy() {
@@ -373,34 +398,27 @@ export class AppService {
     return changed
   }
 
-  allKnownAccountIds(runtime) {
-    return [...new Set([
-      ...this.knownAccounts,
-      ...Object.keys(this.demoRuntime?.accounts || {}),
-      ...Object.keys(runtime?.accounts || {})
-    ])]
-  }
-
-  async collectKnownProfiles(runtime) {
-    const queue = this.allKnownAccountIds(runtime)
-    const queued = new Set(queue)
+  async collectReachableProfiles(runtime, rootAccountId) {
+    if (!rootAccountId) return []
+    const queue = [{ accountId: rootAccountId, depth: 0 }]
+    const queued = new Set([rootAccountId])
     const discovered = new Map()
 
     while (queue.length) {
-      const accountId = queue.shift()
+      const { accountId, depth } = queue.shift()
       queued.delete(accountId)
       if (!accountId || discovered.has(accountId)) continue
       const reader = this.readerFor(accountId, runtime)
       const resolved = await reader.resolveProfile(accountId).catch(() => null)
       if (!resolved) continue
       this.knownAccounts.add(accountId)
-      discovered.set(accountId, { accountId, reader, resolved })
+      discovered.set(accountId, { accountId, depth, reader, resolved })
 
       for (const followRef of resolved.state.followRefs) {
         const follow = await reader.resolveFollow(followRef).catch(() => null)
         const followedAccountId = follow?.follow?.followedAccountId
         if (!followedAccountId || discovered.has(followedAccountId) || queued.has(followedAccountId)) continue
-        queue.push(followedAccountId)
+        queue.push({ accountId: followedAccountId, depth: depth + 1 })
         queued.add(followedAccountId)
       }
     }
@@ -421,32 +439,19 @@ export class AppService {
     return followed
   }
 
-  async searchKnownProfiles(runtime, query) {
+  async searchKnownProfiles(runtime, rootAccountId, query) {
+    if (!rootAccountId) return []
     const trimmed = String(query || '').trim()
     const lower = trimmed.toLowerCase()
     const results = new Map()
 
-    for (const entry of await this.collectKnownProfiles(runtime)) {
+    for (const entry of await this.collectReachableProfiles(runtime, rootAccountId)) {
       results.set(entry.accountId, {
         accountId: entry.accountId,
         username: entry.resolved.profile.username,
         displayName: entry.resolved.profile.displayName,
         verified: entry.resolved.verified
       })
-    }
-
-    if (trimmed && /^[a-f0-9]{32,}$/i.test(trimmed) && !results.has(trimmed)) {
-      const reader = this.readerFor(trimmed, runtime)
-      const resolved = await reader.resolveProfile(trimmed).catch(() => null)
-      if (resolved) {
-        this.knownAccounts.add(trimmed)
-        results.set(trimmed, {
-          accountId: trimmed,
-          username: resolved.profile.username,
-          displayName: resolved.profile.displayName,
-          verified: resolved.verified
-        })
-      }
     }
 
     return [...results.values()]
@@ -457,8 +462,8 @@ export class AppService {
       .sort((left, right) => left.username.localeCompare(right.username) || left.displayName.localeCompare(right.displayName))
   }
 
-  async buildNetworkStats(runtime) {
-    const profiles = await this.collectKnownProfiles(runtime)
+  async buildNetworkStats(runtime, rootAccountId) {
+    const profiles = await this.collectReachableProfiles(runtime, rootAccountId)
     const mediaRefs = new Set()
     const collectionRefs = new Set()
     const keepRefs = new Set()
@@ -794,31 +799,7 @@ export class AppService {
 
   async buildFeed(runtime, accountId) {
     if (!accountId) return []
-    const visited = new Set([accountId])
-    const queue = []
-    const resolved = await runtime.resolveProfile(accountId)
-    for (const followRef of resolved.state.followRefs) {
-      const { follow } = await runtime.resolveFollow(followRef)
-      if (!visited.has(follow.followedAccountId)) {
-        visited.add(follow.followedAccountId)
-        queue.push(follow.followedAccountId)
-      }
-    }
-    const actors = []
-    while (queue.length) {
-      const actorId = queue.shift()
-      const actorReader = this.readerFor(actorId, runtime)
-      const actor = await actorReader.resolveProfile(actorId).catch(() => null)
-      if (!actor) continue
-      actors.push({ accountId: actorId, reader: actorReader, resolved: actor })
-      for (const followRef of actor.state.followRefs) {
-        const { follow } = await actorReader.resolveFollow(followRef)
-        if (!visited.has(follow.followedAccountId)) {
-          visited.add(follow.followedAccountId)
-          queue.push(follow.followedAccountId)
-        }
-      }
-    }
+    const actors = (await this.collectReachableProfiles(runtime, accountId)).filter(entry => entry.depth > 0)
     const items = []
     for (const actor of actors) {
       const packagedMediaRefs = new Set()
@@ -840,15 +821,24 @@ export class AppService {
   }
 
   async buildSuggestions(runtime, currentAccountId) {
+    if (!currentAccountId) return []
     const followed = await this.directFollowedAccountIds(runtime, currentAccountId)
-    return (await this.searchKnownProfiles(runtime, ''))
+    return (await this.collectReachableProfiles(runtime, currentAccountId))
+      .filter(entry => entry.depth >= 2)
+      .map(entry => ({
+        accountId: entry.accountId,
+        username: entry.resolved.profile.username,
+        displayName: entry.resolved.profile.displayName,
+        verified: entry.resolved.verified
+      }))
       .filter(item => item.accountId !== currentAccountId && !followed.has(item.accountId))
+      .sort((left, right) => left.username.localeCompare(right.username) || left.displayName.localeCompare(right.displayName))
       .slice(0, 4)
   }
 
-  async buildShelf(runtime) {
+  async buildShelf(runtime, rootAccountId) {
     const shelf = []
-    for (const entry of await this.collectKnownProfiles(runtime)) {
+    for (const entry of await this.collectReachableProfiles(runtime, rootAccountId)) {
       for (const mediaRef of [...entry.resolved.state.mediaRefs].reverse()) {
         const { media } = await entry.reader.resolveMedia(mediaRef)
         shelf.push({
@@ -865,6 +855,25 @@ export class AppService {
       }
     }
     return shelf
+  }
+
+  async buildFollowInvite(runtime, accountId) {
+    if (!accountId || !runtime?.accounts?.[accountId]) return ''
+    const account = runtime.accounts[accountId]
+    const resolved = await runtime.resolveProfile(accountId).catch(() => null)
+    if (!resolved) return ''
+    const invite = {
+      version: 1,
+      kind: 'follow-invite',
+      accountId,
+      username: resolved.profile.username,
+      displayName: resolved.profile.displayName,
+      issuedAt: resolved.profile.updatedAt
+    }
+    return serializeFollowInvite({
+      ...invite,
+      signature: signRecord(account.secretKeyHex, invite)
+    })
   }
 
   async buildSnapshot(clientId) {
@@ -902,11 +911,12 @@ export class AppService {
       } : null,
       activeSection: session.ui.activeSection,
       discoverQuery: session.ui.discoverQuery,
+      followInvite: await this.buildFollowInvite(session.runtime, currentAccountId),
       selectedProfile,
-      searchResults: session.ui.discoverQuery ? await this.searchKnownProfiles(session.runtime, session.ui.discoverQuery) : [],
+      searchResults: session.ui.discoverQuery ? await this.searchKnownProfiles(session.runtime, currentAccountId, session.ui.discoverQuery) : [],
       feed,
       library: await this.buildLibrary(session.runtime, currentAccountId, session.ui.savedCollectionRefs),
-      network: await this.buildNetworkStats(session.runtime),
+      network: await this.buildNetworkStats(session.runtime, currentAccountId),
       trust: {
         selectedAccountId,
         selectedHeadSeq: selectedResolved?.head?.seq ?? null,
@@ -916,7 +926,7 @@ export class AppService {
       },
       suggestions: await this.buildSuggestions(session.runtime, currentAccountId),
       draftChildren: await this.buildDraft(session.runtime, session.ui.collectionDraftChildRefs),
-      shelfMedia: await this.buildShelf(session.runtime),
+      shelfMedia: await this.buildShelf(session.runtime, currentAccountId),
       flashMessage: session.ui.flashMessage
     }
   }
@@ -929,7 +939,7 @@ export class AppService {
   async createAccount(clientId, input) {
     const session = await this.getSession(clientId)
     const account = await session.runtime.createAccount(input)
-    if (this.demoAccounts.noor) await session.runtime.publishFollow(account.accountId, this.demoAccounts.noor).catch(() => null)
+    if (this.seedDemo && this.demoAccounts.noor) await session.runtime.publishFollow(account.accountId, this.demoAccounts.noor).catch(() => null)
     session.currentAccountId = account.accountId
     session.ui.selectedProfileAccountId = account.accountId
     session.ui.discoverQuery = ''
@@ -956,7 +966,7 @@ export class AppService {
     const session = await this.getSession(clientId)
     session.ui.discoverQuery = String(query || '').trim()
     session.ui.flashMessage = ''
-    const results = session.ui.discoverQuery ? await this.searchKnownProfiles(session.runtime, session.ui.discoverQuery) : []
+    const results = session.ui.discoverQuery ? await this.searchKnownProfiles(session.runtime, session.currentAccountId, session.ui.discoverQuery) : []
     for (const result of results) await this.rememberAccount(result.accountId)
     await this.saveSession(clientId, session)
     return results
@@ -1123,11 +1133,48 @@ export class AppService {
 
   async followAccount(clientId, accountId) {
     const session = await this.getSession(clientId)
+    const followed = await this.directFollowedAccountIds(session.runtime, session.currentAccountId)
+    if (accountId === session.currentAccountId || followed.has(accountId)) {
+      session.ui.flashMessage = accountId === session.currentAccountId ? "You're already here." : 'Already in your network.'
+      await this.saveSession(clientId, session)
+      return false
+    }
     await this.rememberAccount(accountId)
     const result = await session.runtime.publishFollow(session.currentAccountId, accountId)
     session.ui.flashMessage = 'Following.'
     await this.saveSession(clientId, session)
     return result
+  }
+
+  async importFollowInvite(clientId, token) {
+    const session = await this.getSession(clientId)
+    try {
+      if (!session.currentAccountId) throw new Error('Create an account before importing an invite.')
+      const invite = parseFollowInviteToken(token)
+      if (invite.accountId === session.currentAccountId) throw new Error('You cannot import your own invite.')
+      const followed = await this.directFollowedAccountIds(session.runtime, session.currentAccountId)
+      if (followed.has(invite.accountId)) {
+        session.ui.flashMessage = `Already following @${invite.username}.`
+        await this.saveSession(clientId, session)
+        return false
+      }
+      await this.rememberAccount(invite.accountId)
+      await session.runtime.resolveProfile(invite.accountId).catch(() => null)
+      await session.runtime.publishFollow(session.currentAccountId, invite.accountId)
+      session.ui.discoverQuery = ''
+      session.ui.activeSection = 'discover'
+      session.ui.flashMessage = `Added @${invite.username} to your network.`
+      await this.saveSession(clientId, session)
+      return {
+        accountId: invite.accountId,
+        username: invite.username,
+        displayName: invite.displayName
+      }
+    } catch (error) {
+      session.ui.flashMessage = error instanceof Error ? error.message : 'Invite could not be imported.'
+      await this.saveSession(clientId, session)
+      return false
+    }
   }
 
   async addDraftChild(clientId, mediaRef) {
