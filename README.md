@@ -38,6 +38,7 @@ This application currently demonstrates:
 - profile resolution by account id through a mutable account head
 - follow-invite export/import as the default way to join another person's network
 - invite-carried rendezvous hints plus a persisted peerbook so imported follows can reconnect after restart
+- peerbook freshness tracking for imported device hints, including last import, last attempt, last success, and failure count
 - network-scoped account discovery and search through the reachable follow graph
 - immutable media publishing for image, audio, video, and text metadata
 - original and curated collections
@@ -62,12 +63,21 @@ The default product surface should be shaped around one job first: getting peopl
 The networking and peer-to-peer transport are still simplified in parts of the app. The live browser shell now runs through the runtime-backed app service, but it still relies on:
 
 - a local bootstrap DHT node per app-service instance
-- invite-carried loopback/LAN/manual device hints rather than full NAT traversal or relay support
+- invite-carried loopback/LAN/manual device hints plus a freshness-ranked peerbook rather than a full relay layer
+- router-assisted home reachability and LAN discovery before any more advanced relay or introduction strategy
 - local/dev transport assumptions rather than hardened real-world reachability between ordinary home devices
 
 This keeps the identity and authorship architecture clean while the invite-first transport and reachability model are still being built out.
 
 For manual host advertisement, set `YOLK_ADVERTISE_HOSTS` to a comma-separated list of reachable hosts or IPs before starting the server. Those hosts are signed into follow invites alongside the local device's detected LAN addresses.
+
+The runtime currently tries the following home-device reachability layers:
+
+- LAN discovery is enabled by default so nearby peers can find each other on the same local network.
+- Router-assisted NAT mapping is enabled by default so home routers can expose the runtime's port when they support it.
+- Public torrent trackers remain opt-in; the default transport is still invite-first rather than tracker-first.
+- Imported device hints are persisted and ranked so the most recently successful addresses are tried before stale ones.
+- Failed import/reachability attempts are remembered so the app can retry later instead of forgetting the peer entirely.
 
 ## Stack
 
@@ -149,7 +159,9 @@ Rendezvous currently means:
 
 - import a follow invite
 - persist the shared device hints in the local peerbook
+- rank those hints by freshness and recent success
 - restart the local runtime against those hints so the other device can act as the first reachable peer
+- remember failed attempts so later retries can prefer fresher or more successful paths
 
 ### 5. Packages
 
@@ -201,6 +213,7 @@ For deterministic browser regression coverage, the browser sanity harness explic
 - immutable media payloads move over a real torrent swarm
 - Keep means download + continue seeding
 - isolated app-service instances can rendezvous through invite-carried device hints without sharing one bootstrap node
+- offline invite imports persist failed rendezvous attempts for later retry
 
 When behavior changes:
 

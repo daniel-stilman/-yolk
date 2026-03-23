@@ -8,7 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "node server.mjs",
     "start": "node server.mjs",
-    "test": "npm run build && node --test tests/*.test.mjs"
+    "test": "npm run build && node --test tests/app.test.mjs && node --test --test-force-exit tests/e2e.test.mjs && node --experimental-test-isolation=none --test --test-force-exit tests/network.test.mjs"
   },
   "devDependencies": {
     "playwright-core": "^1.58.2",

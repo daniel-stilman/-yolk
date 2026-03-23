@@ -61,6 +61,60 @@ const transportDefaults = () => ({
   peerHintsByAccountId: {}
 })
 
+function validIsoTimestamp(value) {
+  const text = String(value || '').trim()
+  return text && !Number.isNaN(Date.parse(text)) ? text : null
+}
+
+function mergePeerHint(base, next) {
+  const failureCount = Math.max(
+    0,
+    Number(base?.failureCount || 0) || 0,
+    Number(next?.failureCount || 0) || 0
+  )
+  const importedAt = [validIsoTimestamp(next?.lastImportedAt), validIsoTimestamp(base?.lastImportedAt)]
+    .filter(Boolean)
+    .sort((left, right) => Date.parse(right) - Date.parse(left))[0] || null
+  const lastTriedAt = [validIsoTimestamp(next?.lastTriedAt), validIsoTimestamp(base?.lastTriedAt)]
+    .filter(Boolean)
+    .sort((left, right) => Date.parse(right) - Date.parse(left))[0] || null
+  const lastSucceededAt = [validIsoTimestamp(next?.lastSucceededAt), validIsoTimestamp(base?.lastSucceededAt)]
+    .filter(Boolean)
+    .sort((left, right) => Date.parse(right) - Date.parse(left))[0] || null
+  const lastFailedAt = [validIsoTimestamp(next?.lastFailedAt), validIsoTimestamp(base?.lastFailedAt)]
+    .filter(Boolean)
+    .sort((left, right) => Date.parse(right) - Date.parse(left))[0] || null
+  return {
+    host: String(next?.host || base?.host || '').trim(),
+    port: Number(next?.port || base?.port || 0),
+    scope: String(next?.scope || base?.scope || '').trim() || 'direct',
+    source: String(next?.source || base?.source || '').trim() || 'invite',
+    lastImportedAt: importedAt,
+    lastTriedAt,
+    lastSucceededAt,
+    lastFailedAt,
+    failureCount
+  }
+}
+
+function hintRankValue(hint) {
+  const succeededAt = validIsoTimestamp(hint?.lastSucceededAt)
+  const importedAt = validIsoTimestamp(hint?.lastImportedAt)
+  const failedAt = validIsoTimestamp(hint?.lastFailedAt)
+  const triedAt = validIsoTimestamp(hint?.lastTriedAt)
+  return (
+    (succeededAt ? Date.parse(succeededAt) : 0) * 4 +
+    (importedAt ? Date.parse(importedAt) : 0) * 2 +
+    (triedAt ? Date.parse(triedAt) : 0) -
+    (failedAt ? Date.parse(failedAt) : 0) -
+    (Number(hint?.failureCount || 0) || 0) * 10_000_000_000_000
+  )
+}
+
+function orderPeerHints(hints) {
+  return normalizePeerHints(hints).sort((left, right) => hintRankValue(right) - hintRankValue(left))
+}
+
 function parseAdvertiseHosts(value) {
   if (Array.isArray(value)) return value.map(item => String(item || '').trim()).filter(Boolean)
   return String(value || '')
@@ -71,22 +125,15 @@ function parseAdvertiseHosts(value) {
 
 function normalizePeerHints(hints) {
   if (!Array.isArray(hints)) return []
-  const seen = new Set()
-  const normalized = []
+  const byAddress = new Map()
   for (const hint of hints) {
     const host = String(hint?.host || '').trim()
     const port = Number(hint?.port || 0)
     if (!host || !Number.isInteger(port) || port <= 0) continue
     const key = `${host}:${port}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    normalized.push({
-      host,
-      port,
-      scope: String(hint?.scope || '').trim() || 'direct'
-    })
+    byAddress.set(key, mergePeerHint(byAddress.get(key), { ...hint, host, port }))
   }
-  return normalized
+  return [...byAddress.values()]
 }
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -187,6 +234,9 @@ export class AppService {
     this.advertiseHosts = parseAdvertiseHosts(options.advertiseHosts || process.env.YOLK_ADVERTISE_HOSTS)
     this.includeLanHints = options.includeLanHints !== false
     this.includeLoopbackHints = options.includeLoopbackHints !== false
+    this.enableLanDiscovery = options.enableLanDiscovery !== false
+    this.enableNatTraversal = options.enableNatTraversal !== false
+    this.enableTrackers = options.enableTrackers === true
     this.clientsDir = path.join(this.baseDir, 'clients')
     this.demoDir = path.join(this.baseDir, 'demo')
     this.demoAccountsFile = path.join(this.baseDir, 'demo-accounts.json')
@@ -214,7 +264,10 @@ export class AppService {
       this.demoRuntime = await P2PRuntime.create({
         name: 'demo',
         baseDir: this.demoDir,
-        bootstrap: [`127.0.0.1:${this.bootstrap.address.port}`]
+        bootstrap: [`127.0.0.1:${this.bootstrap.address.port}`],
+        enableLanDiscovery: this.enableLanDiscovery,
+        enableNatTraversal: this.enableNatTraversal,
+        enableTrackers: this.enableTrackers
       })
       await this.ensureDemoNetwork()
     }
@@ -258,7 +311,10 @@ export class AppService {
       this.demoRuntime = await P2PRuntime.create({
         name: 'demo',
         baseDir: this.demoDir,
-        bootstrap: [`127.0.0.1:${this.bootstrap.address.port}`]
+        bootstrap: [`127.0.0.1:${this.bootstrap.address.port}`],
+        enableLanDiscovery: this.enableLanDiscovery,
+        enableNatTraversal: this.enableNatTraversal,
+        enableTrackers: this.enableTrackers
       })
     }
 
@@ -402,7 +458,7 @@ export class AppService {
   bootstrapEntriesForTransport(transport) {
     const localBootstrap = this.bootstrap?.address?.port ? [`127.0.0.1:${this.bootstrap.address.port}`] : []
     const peerBootstrap = Object.values(transport?.peerHintsByAccountId || {})
-      .flatMap(hints => normalizePeerHints(hints))
+      .flatMap(hints => orderPeerHints(hints).slice(0, 4))
       .map(hint => `${hint.host}:${hint.port}`)
     return [...new Set([...localBootstrap, ...peerBootstrap])]
   }
@@ -412,7 +468,10 @@ export class AppService {
       name: `client-${clientId}`,
       baseDir: path.join(this.clientsDir, clientId),
       bootstrap: this.bootstrapEntriesForTransport(transport),
-      dhtPort: transport?.dhtPort || 0
+      dhtPort: transport?.dhtPort || 0,
+      enableLanDiscovery: this.enableLanDiscovery,
+      enableNatTraversal: this.enableNatTraversal,
+      enableTrackers: this.enableTrackers
     }
     try {
       return await P2PRuntime.create(options)
@@ -437,6 +496,7 @@ export class AppService {
     const dhtAddress = session.runtime.getDhtAddress()
     if (dhtAddress?.port) session.transport.dhtPort = dhtAddress.port
     this.sessions.set(clientId, session)
+    session.transportDirty = false
     await this.saveSession(clientId, session)
     return session
   }
@@ -465,6 +525,7 @@ export class AppService {
     if (!session.ui.selectedProfileAccountId) session.ui.selectedProfileAccountId = session.currentAccountId
     if (session.currentAccountId) this.knownAccounts.add(session.currentAccountId)
     this.sessions.set(clientId, session)
+    session.transportDirty = false
     await this.saveSession(clientId, session)
     return session
   }
@@ -496,13 +557,64 @@ export class AppService {
     return normalizePeerHints(hints)
   }
 
-  async resolveProfileWithRetry(runtime, accountId, attempts = 10, delayMs = 120) {
+  mergePeerHintsForAccount(session, accountId, hints, metadata = {}) {
+    if (!session?.transport || !accountId) return false
+    const existing = normalizePeerHints(session.transport.peerHintsByAccountId[accountId])
+    const next = normalizePeerHints([
+      ...existing,
+      ...normalizePeerHints(hints).map(hint => ({
+        ...hint,
+        ...metadata
+      }))
+    ])
+    const existingSerialized = stableStringify(orderPeerHints(existing))
+    const nextSerialized = stableStringify(orderPeerHints(next))
+    if (existingSerialized === nextSerialized) return false
+    session.transport.peerHintsByAccountId[accountId] = orderPeerHints(next)
+    session.transportDirty = true
+    return true
+  }
+
+  markPeerHintsAttempt(session, accountId, status) {
+    if (!session?.transport || !accountId) return false
+    const existing = normalizePeerHints(session.transport.peerHintsByAccountId[accountId])
+    if (!existing.length) return false
+    const timestamp = new Date().toISOString()
+    const next = existing.map(hint => {
+      if (status === 'success') {
+        return {
+          ...hint,
+          lastTriedAt: timestamp,
+          lastSucceededAt: timestamp,
+          failureCount: 0
+        }
+      }
+      return {
+        ...hint,
+        lastTriedAt: timestamp,
+        lastFailedAt: timestamp,
+        failureCount: (Number(hint.failureCount || 0) || 0) + 1
+      }
+    })
+    const existingSerialized = stableStringify(orderPeerHints(existing))
+    const nextSerialized = stableStringify(orderPeerHints(next))
+    if (existingSerialized === nextSerialized) return false
+    session.transport.peerHintsByAccountId[accountId] = orderPeerHints(next)
+    session.transportDirty = true
+    return true
+  }
+
+  async resolveProfileWithRetry(runtime, accountId, session = null, attempts = 10, delayMs = 120) {
     let lastResolved = null
     for (let index = 0; index < attempts; index += 1) {
       lastResolved = await runtime.resolveProfile(accountId).catch(() => null)
-      if (lastResolved) return lastResolved
+      if (lastResolved) {
+        if (session) this.markPeerHintsAttempt(session, accountId, 'success')
+        return lastResolved
+      }
       if (index < attempts - 1) await wait(delayMs)
     }
+    if (session) this.markPeerHintsAttempt(session, accountId, 'failure')
     return lastResolved
   }
 
@@ -526,7 +638,7 @@ export class AppService {
     return changed
   }
 
-  async collectReachableProfiles(runtime, rootAccountId) {
+  async collectReachableProfiles(runtime, rootAccountId, session = null) {
     if (!rootAccountId) return []
     const queue = [{ accountId: rootAccountId, depth: 0 }]
     const queued = new Set([rootAccountId])
@@ -537,7 +649,9 @@ export class AppService {
       queued.delete(accountId)
       if (!accountId || discovered.has(accountId)) continue
       const reader = this.readerFor(accountId, runtime)
-      const resolved = await reader.resolveProfile(accountId).catch(() => null)
+      const resolved = reader === runtime
+        ? await this.resolveProfileWithRetry(runtime, accountId, session).catch(() => null)
+        : await reader.resolveProfile(accountId).catch(() => null)
       if (!resolved) continue
       this.knownAccounts.add(accountId)
       discovered.set(accountId, { accountId, depth, reader, resolved })
@@ -567,13 +681,13 @@ export class AppService {
     return followed
   }
 
-  async searchKnownProfiles(runtime, rootAccountId, query) {
+  async searchKnownProfiles(runtime, rootAccountId, query, session = null) {
     if (!rootAccountId) return []
     const trimmed = String(query || '').trim()
     const lower = trimmed.toLowerCase()
     const results = new Map()
 
-    for (const entry of await this.collectReachableProfiles(runtime, rootAccountId)) {
+    for (const entry of await this.collectReachableProfiles(runtime, rootAccountId, session)) {
       results.set(entry.accountId, {
         accountId: entry.accountId,
         username: entry.resolved.profile.username,
@@ -590,8 +704,8 @@ export class AppService {
       .sort((left, right) => left.username.localeCompare(right.username) || left.displayName.localeCompare(right.displayName))
   }
 
-  async buildNetworkStats(runtime, rootAccountId) {
-    const profiles = await this.collectReachableProfiles(runtime, rootAccountId)
+  async buildNetworkStats(runtime, rootAccountId, session = null) {
+    const profiles = await this.collectReachableProfiles(runtime, rootAccountId, session)
     const mediaRefs = new Set()
     const collectionRefs = new Set()
     const keepRefs = new Set()
@@ -754,10 +868,12 @@ export class AppService {
     }
   }
 
-  async resolveProfileSummary(runtime, accountId) {
+  async resolveProfileSummary(runtime, accountId, session = null) {
     if (!accountId) return null
     const reader = this.readerFor(accountId, runtime)
-    const resolved = await reader.resolveProfile(accountId)
+    const resolved = reader === runtime
+      ? await this.resolveProfileWithRetry(runtime, accountId, session)
+      : await reader.resolveProfile(accountId)
     const uploads = []
     for (const mediaRef of [...resolved.state.mediaRefs].reverse()) {
       const { media } = await reader.resolveMedia(mediaRef)
@@ -925,9 +1041,9 @@ export class AppService {
     }
   }
 
-  async buildFeed(runtime, accountId) {
+  async buildFeed(runtime, accountId, session = null) {
     if (!accountId) return []
-    const actors = (await this.collectReachableProfiles(runtime, accountId)).filter(entry => entry.depth > 0)
+    const actors = (await this.collectReachableProfiles(runtime, accountId, session)).filter(entry => entry.depth > 0)
     const items = []
     for (const actor of actors) {
       const packagedMediaRefs = new Set()
@@ -948,10 +1064,10 @@ export class AppService {
     return items.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   }
 
-  async buildSuggestions(runtime, currentAccountId) {
+  async buildSuggestions(runtime, currentAccountId, session = null) {
     if (!currentAccountId) return []
     const followed = await this.directFollowedAccountIds(runtime, currentAccountId)
-    return (await this.collectReachableProfiles(runtime, currentAccountId))
+    return (await this.collectReachableProfiles(runtime, currentAccountId, session))
       .filter(entry => entry.depth >= 2)
       .map(entry => ({
         accountId: entry.accountId,
@@ -964,9 +1080,9 @@ export class AppService {
       .slice(0, 4)
   }
 
-  async buildShelf(runtime, rootAccountId) {
+  async buildShelf(runtime, rootAccountId, session = null) {
     const shelf = []
-    for (const entry of await this.collectReachableProfiles(runtime, rootAccountId)) {
+    for (const entry of await this.collectReachableProfiles(runtime, rootAccountId, session)) {
       for (const mediaRef of [...entry.resolved.state.mediaRefs].reverse()) {
         const { media } = await entry.reader.resolveMedia(mediaRef)
         shelf.push({
@@ -1007,14 +1123,16 @@ export class AppService {
 
   async buildSnapshot(clientId) {
     const session = await this.getSession(clientId)
+    session.transportDirty = false
     if (await this.ensureSavedCollectionPackages(session)) await this.saveSession(clientId, session)
     const currentAccountId = session.currentAccountId
     const currentProfile = currentAccountId ? await session.runtime.resolveProfile(currentAccountId) : null
     const selectedAccountId = session.ui.selectedProfileAccountId || currentAccountId
+    const selectedReader = selectedAccountId ? this.readerFor(selectedAccountId, session.runtime) : null
     const selectedResolved = selectedAccountId
-      ? await this.readerFor(selectedAccountId, session.runtime).resolveProfile(selectedAccountId).catch(() => null)
+      ? await this.resolveProfileWithRetry(selectedReader, selectedAccountId, selectedReader === session.runtime ? session : null).catch(() => null)
       : null
-    const selectedProfile = await this.resolveProfileSummary(session.runtime, selectedAccountId)
+    const selectedProfile = await this.resolveProfileSummary(session.runtime, selectedAccountId, session)
     if (selectedProfile) {
       selectedProfile.collections = selectedProfile.collections.map(item => ({
         ...item,
@@ -1022,7 +1140,7 @@ export class AppService {
         owned: selectedProfile.accountId === currentAccountId
       }))
     }
-    const feed = (await this.buildFeed(session.runtime, currentAccountId)).map(item => item.post && item.collectionRef
+    const feed = (await this.buildFeed(session.runtime, currentAccountId, session)).map(item => item.post && item.collectionRef
       ? {
           ...item,
           post: {
@@ -1032,7 +1150,7 @@ export class AppService {
           }
         }
       : item)
-    return {
+    const snapshot = {
       currentAccount: currentProfile ? {
         accountId: currentAccountId,
         username: currentProfile.profile.username,
@@ -1042,10 +1160,10 @@ export class AppService {
       discoverQuery: session.ui.discoverQuery,
       followInvite: await this.buildFollowInvite(session, currentAccountId),
       selectedProfile,
-      searchResults: session.ui.discoverQuery ? await this.searchKnownProfiles(session.runtime, currentAccountId, session.ui.discoverQuery) : [],
+      searchResults: session.ui.discoverQuery ? await this.searchKnownProfiles(session.runtime, currentAccountId, session.ui.discoverQuery, session) : [],
       feed,
       library: await this.buildLibrary(session.runtime, currentAccountId, session.ui.savedCollectionRefs),
-      network: await this.buildNetworkStats(session.runtime, currentAccountId),
+      network: await this.buildNetworkStats(session.runtime, currentAccountId, session),
       trust: {
         selectedAccountId,
         selectedHeadSeq: selectedResolved?.head?.seq ?? null,
@@ -1053,11 +1171,16 @@ export class AppService {
         resolvedViaDhtHead: Boolean(selectedAccountId && !session.runtime.accounts?.[selectedAccountId] && !this.demoRuntime?.accounts?.[selectedAccountId]),
         verifiedProfile: Boolean(selectedResolved?.verified)
       },
-      suggestions: await this.buildSuggestions(session.runtime, currentAccountId),
+      suggestions: await this.buildSuggestions(session.runtime, currentAccountId, session),
       draftChildren: await this.buildDraft(session.runtime, session.ui.collectionDraftChildRefs),
-      shelfMedia: await this.buildShelf(session.runtime, currentAccountId),
+      shelfMedia: await this.buildShelf(session.runtime, currentAccountId, session),
       flashMessage: session.ui.flashMessage
     }
+    if (session.transportDirty) {
+      session.transportDirty = false
+      await this.saveSession(clientId, session)
+    }
+    return snapshot
   }
 
   async resolveMediaAsset(clientId, mediaRef) {
@@ -1082,7 +1205,7 @@ export class AppService {
   async openProfile(clientId, accountId) {
     const session = await this.getSession(clientId)
     await this.rememberAccount(accountId)
-    await session.runtime.resolveProfile(accountId)
+    await this.resolveProfileWithRetry(session.runtime, accountId, session)
     session.ui.selectedProfileAccountId = accountId
     session.ui.activeSection = 'profile'
     session.ui.discoverQuery = ''
@@ -1095,7 +1218,7 @@ export class AppService {
     const session = await this.getSession(clientId)
     session.ui.discoverQuery = String(query || '').trim()
     session.ui.flashMessage = ''
-    const results = session.ui.discoverQuery ? await this.searchKnownProfiles(session.runtime, session.currentAccountId, session.ui.discoverQuery) : []
+    const results = session.ui.discoverQuery ? await this.searchKnownProfiles(session.runtime, session.currentAccountId, session.ui.discoverQuery, session) : []
     for (const result of results) await this.rememberAccount(result.accountId)
     await this.saveSession(clientId, session)
     return results
@@ -1277,9 +1400,10 @@ export class AppService {
 
   async importFollowInvite(clientId, token) {
     const session = await this.getSession(clientId)
+    let invite = null
     try {
       if (!session.currentAccountId) throw new Error('Create an account before importing an invite.')
-      const invite = parseFollowInviteToken(token)
+      invite = parseFollowInviteToken(token)
       if (invite.accountId === session.currentAccountId) throw new Error('You cannot import your own invite.')
       const followed = await this.directFollowedAccountIds(session.runtime, session.currentAccountId)
       if (followed.has(invite.accountId)) {
@@ -1288,12 +1412,31 @@ export class AppService {
         return false
       }
       if (invite.rendezvousHints.length) {
-        session.transport.peerHintsByAccountId[invite.accountId] = invite.rendezvousHints
+        this.mergePeerHintsForAccount(session, invite.accountId, invite.rendezvousHints, {
+          source: 'invite',
+          lastImportedAt: new Date().toISOString()
+        })
         await this.restartSessionRuntime(clientId, session)
       }
       await this.rememberAccount(invite.accountId)
       await session.runtime.publishFollow(session.currentAccountId, invite.accountId)
-      const reachable = await this.resolveProfileWithRetry(session.runtime, invite.accountId)
+      const reachable = await this.resolveProfileWithRetry(session.runtime, invite.accountId, session)
+      if (invite.rendezvousHints.length) {
+        const timestamp = new Date().toISOString()
+        session.transport.peerHintsByAccountId[invite.accountId] = orderPeerHints((session.transport.peerHintsByAccountId[invite.accountId] || []).map(hint => reachable
+          ? {
+              ...hint,
+              lastTriedAt: timestamp,
+              lastSucceededAt: timestamp,
+              failureCount: 0
+            }
+          : {
+              ...hint,
+              lastTriedAt: timestamp,
+              lastFailedAt: timestamp,
+              failureCount: (Number(hint.failureCount || 0) || 0) + 1
+            }))
+      }
       session.ui.discoverQuery = ''
       session.ui.activeSection = 'discover'
       session.ui.flashMessage = reachable
@@ -1306,6 +1449,15 @@ export class AppService {
         displayName: invite.displayName
       }
     } catch (error) {
+      if (invite?.accountId && invite?.rendezvousHints?.length) {
+        const timestamp = new Date().toISOString()
+        session.transport.peerHintsByAccountId[invite.accountId] = orderPeerHints((session.transport.peerHintsByAccountId[invite.accountId] || []).map(hint => ({
+          ...hint,
+          lastTriedAt: timestamp,
+          lastFailedAt: timestamp,
+          failureCount: (Number(hint.failureCount || 0) || 0) + 1
+        })))
+      }
       session.ui.flashMessage = error instanceof Error ? error.message : 'Invite could not be imported.'
       await this.saveSession(clientId, session)
       return false

@@ -174,6 +174,10 @@ export class P2PRuntime {
     this.bootstrap = options.bootstrap || []
     this.dhtPort = options.dhtPort || 0
     this.torrentPort = options.torrentPort || 0
+    this.enableLanDiscovery = options.enableLanDiscovery !== false
+    this.enableNatTraversal = options.enableNatTraversal !== false
+    this.enableTrackers = options.enableTrackers === true
+    this.trackerAnnounce = Array.isArray(options.trackerAnnounce) ? options.trackerAnnounce.filter(Boolean) : []
     this.accountsFile = path.join(this.baseDir, 'accounts.json')
     this.metaDir = path.join(this.baseDir, 'meta')
     this.contentDir = path.join(this.baseDir, 'content')
@@ -207,10 +211,10 @@ export class P2PRuntime {
     await waitForListen(this.dht, this.dhtPort)
     this.dhtAddress = this.dht.address()
     this.client = new WebTorrent({
-      tracker: false,
-      lsd: false,
-      natUpnp: false,
-      natPmp: false,
+      tracker: this.enableTrackers,
+      lsd: this.enableLanDiscovery,
+      natUpnp: this.enableNatTraversal,
+      natPmp: this.enableNatTraversal,
       torrentPort: this.torrentPort,
       dht: { bootstrap: this.bootstrap }
     })
@@ -371,7 +375,7 @@ export class P2PRuntime {
         reject(error)
       }
       this.client.on('error', onError)
-      this.client.seed(filePath, { announce: [], ...options }, torrent => {
+      this.client.seed(filePath, { announce: this.enableTrackers ? this.trackerAnnounce : [], ...options }, torrent => {
         this.client.off('error', onError)
         resolve(torrent)
       })

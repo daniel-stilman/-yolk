@@ -234,12 +234,64 @@ test('follow invite rendezvous hints connect isolated app-service instances with
     await bobService.importFollowInvite(bobClient, invite)
     bobSnapshot = await bobService.buildSnapshot(bobClient)
     assert.ok(bobSnapshot.feed.some(item => item.subjectTitle === 'Harbor Window'))
+    const persisted = await bobService.readSessionState(bobClient)
+    const peerHints = persisted.transport.peerHintsByAccountId[alice.accountId] || []
+    const loopbackHint = peerHints.find(hint => hint.host === '127.0.0.1')
+    assert.ok(loopbackHint?.lastImportedAt)
+    assert.ok(loopbackHint?.lastTriedAt)
+    assert.ok(loopbackHint?.lastSucceededAt)
+    assert.equal(loopbackHint?.failureCount, 0)
 
     await bobService.openProfile(bobClient, alice.accountId)
     bobSnapshot = await bobService.buildSnapshot(bobClient)
     assert.equal(bobSnapshot.selectedProfile?.username, 'alice')
   } finally {
     await aliceService.destroy()
+    await bobService.destroy()
+    await fs.rm(aliceBaseDir, { recursive: true, force: true })
+    await fs.rm(bobBaseDir, { recursive: true, force: true })
+  }
+})
+
+test('offline invite hints record failed rendezvous attempts for later retry', async () => {
+  const aliceBaseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yolk-rendezvous-offline-alice-'))
+  const bobBaseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yolk-rendezvous-offline-bob-'))
+  const sampleMediaDir = path.join(repoRoot, 'sample media')
+  let aliceService = await AppService.create({ baseDir: aliceBaseDir, sampleMediaDir })
+  const bobService = await AppService.create({ baseDir: bobBaseDir, sampleMediaDir })
+
+  try {
+    const aliceClient = 'alice-offline'
+    const bobClient = 'bob-offline'
+    const alice = await aliceService.createAccount(aliceClient, {
+      username: 'alice',
+      displayName: 'Alice Atlas',
+      bio: 'Offline seed'
+    })
+    const invite = (await aliceService.buildSnapshot(aliceClient)).followInvite
+    await aliceService.destroy()
+    aliceService = null
+
+    await bobService.createAccount(bobClient, {
+      username: 'bob',
+      displayName: 'Bob North',
+      bio: 'Waiting for a later retry'
+    })
+    await bobService.importFollowInvite(bobClient, invite)
+    const persisted = await bobService.readSessionState(bobClient)
+    const peerHints = persisted.transport.peerHintsByAccountId[alice.accountId] || []
+    const loopbackHint = peerHints.find(hint => hint.host === '127.0.0.1')
+    assert.ok(loopbackHint?.lastImportedAt)
+    assert.ok(loopbackHint?.lastTriedAt)
+    assert.ok(loopbackHint?.lastFailedAt)
+    assert.ok((loopbackHint?.failureCount || 0) >= 1)
+    assert.equal(loopbackHint?.lastSucceededAt || null, null)
+
+    const snapshot = await bobService.buildSnapshot(bobClient)
+    assert.equal(snapshot.network.accounts, 1)
+    assert.deepEqual(snapshot.feed, [])
+  } finally {
+    if (aliceService) await aliceService.destroy()
     await bobService.destroy()
     await fs.rm(aliceBaseDir, { recursive: true, force: true })
     await fs.rm(bobBaseDir, { recursive: true, force: true })

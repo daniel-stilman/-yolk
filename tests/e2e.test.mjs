@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,11 +45,15 @@ async function waitForServer(url, timeoutMs = 10000) {
 }
 
 async function startServer() {
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yolk-e2e-runtime-'));
   const instance = await createYolkServer({
     port: 0,
-    baseDir: path.join(repoRoot, '.tmp-e2e-runtime'),
+    baseDir,
     sampleMediaDir: path.join(repoRoot, 'sample media'),
-    seedDemo: true
+    seedDemo: true,
+    enableLanDiscovery: false,
+    enableNatTraversal: false,
+    enableTrackers: false
   });
   const baseUrl = instance.url;
   try {
@@ -59,7 +64,10 @@ async function startServer() {
   }
   return {
     baseUrl,
-    stop: async () => instance.close()
+    stop: async () => {
+      await instance.close();
+      fs.rmSync(baseDir, { recursive: true, force: true });
+    }
   };
 }
 

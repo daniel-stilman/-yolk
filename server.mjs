@@ -80,7 +80,10 @@ export async function createYolkServer(options = {}) {
     seedDemo: options.seedDemo === true,
     advertiseHosts: options.advertiseHosts,
     includeLanHints: options.includeLanHints,
-    includeLoopbackHints: options.includeLoopbackHints
+    includeLoopbackHints: options.includeLoopbackHints,
+    enableLanDiscovery: options.enableLanDiscovery,
+    enableNatTraversal: options.enableNatTraversal,
+    enableTrackers: options.enableTrackers
   });
   const server = createServer(async (req, res) => {
     const url = new URL(req.url || '/', 'http://127.0.0.1');
