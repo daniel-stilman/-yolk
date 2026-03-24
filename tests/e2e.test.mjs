@@ -1,11 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
-import { createYolkServer } from '../server.mjs';
+import { startTestFlowServer } from '../scripts/test-flow-server.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -13,10 +12,6 @@ const repoRoot = path.join(__dirname, '..');
 const sanityInputPath = path.join(__dirname, 'sanity', 'yolk_sanity_input.json');
 const sanityExpectedPath = path.join(__dirname, 'sanity', 'yolk_sanity_expected.json');
 const edgePath = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
-
-function delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
 
 function assertObjectSubset(actual, expected) {
   assert.ok(actual && typeof actual === 'object', 'expected object');
@@ -32,42 +27,14 @@ function assertObjectSubset(actual, expected) {
   }
 }
 
-async function waitForServer(url, timeoutMs = 10000) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const response = await fetch(url);
-      if (response.ok) return;
-    } catch {}
-    await delay(150);
-  }
-  throw new Error(`Server did not respond at ${url} within ${timeoutMs}ms`);
-}
-
 async function startServer() {
-  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yolk-e2e-runtime-'));
-  const instance = await createYolkServer({
+  const instance = await startTestFlowServer({
     port: 0,
-    baseDir,
-    sampleMediaDir: path.join(repoRoot, 'sample media'),
-    seedDemo: true,
-    enableLanDiscovery: false,
-    enableNatTraversal: false,
-    enableTrackers: false
+    cleanup: true
   });
-  const baseUrl = instance.url;
-  try {
-    await waitForServer(baseUrl);
-  } catch (error) {
-    await instance.close();
-    throw error;
-  }
   return {
-    baseUrl,
-    stop: async () => {
-      await instance.close();
-      fs.rmSync(baseDir, { recursive: true, force: true });
-    }
+    baseUrl: instance.baseUrl,
+    stop: async () => instance.stop()
   };
 }
 

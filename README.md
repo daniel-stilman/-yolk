@@ -111,6 +111,20 @@ npm run dev
 
 Open `http://127.0.0.1:4173`.
 
+For a deterministic local inspection run that matches the browser sanity flow, use:
+
+```cmd
+scripts\open-test-app.cmd
+```
+
+That script builds the app, launches the same demo-seeded test-flow server used by the browser regression harness, opens the browser, and keeps the server alive until you press `Ctrl+C`.
+
+There is also a package script for the same path:
+
+```bash
+npm run app:testflow
+```
+
 ## Architecture
 
 ### 1. Identity Layer
